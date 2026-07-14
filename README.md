@@ -1,12 +1,10 @@
-# 🍽️ RecipeBook
-<!-- Replace "RecipeBook" with your project name above and in the badges below -->
+# 🍽️ FoodDecider
 
 A self-hosted recipe manager with a clean editing experience and AI-powered recipe import — paste a URL from any recipe website and it extracts everything automatically.
 
 ![PHP](https://img.shields.io/badge/PHP-8.x-777BB4?style=flat-square&logo=php&logoColor=white)
 ![JavaScript](https://img.shields.io/badge/JavaScript-ES6+-F7DF1E?style=flat-square&logo=javascript&logoColor=black)
 ![MySQL](https://img.shields.io/badge/MySQL-8.x-4479A1?style=flat-square&logo=mysql&logoColor=white)
-![Claude AI](https://img.shields.io/badge/Claude-AI%20Powered-D97757?style=flat-square)
 ![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)
 
 ---
@@ -80,14 +78,13 @@ ingredients                    steps
 - PHP 8.x with PDO extension
 - MySQL 8.x
 - Python 3.10+ (for AI import feature)
-- An [Anthropic API key](https://console.anthropic.com/)
 
 ### Installation
 
 1. **Clone the repository**
    ```bash
    git clone https://github.com/yourusername/recipebook.git
-   cd recipebook
+   cd Fooddecider
    ```
 
 2. **Set up the database**
@@ -105,7 +102,6 @@ ingredients                    steps
    DB_NAME=recipebook
    DB_USER=your_user
    DB_PASS=your_password
-   ANTHROPIC_API_KEY=sk-ant-...
    ```
 
 4. **Install Python dependencies**
