@@ -1,0 +1,111 @@
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Decide your next meal</title>
+    <link rel="stylesheet" href="assets/style.css">
+</head>
+
+<body>
+
+    <div id="user-info">
+    </div>
+
+    </div>
+    <div class="button-container">
+        <button class="filter-button" id="filter-button">Filters</button>
+        <button class="random-button" id="random-button">Random recipe</button>
+        <button class="add-button" id="add-button">Add new recipe</button>
+    </div>
+
+    <!-- Add menu -->
+    <div class="add-menu hidden" id="add-menu">
+        <h3>add recipe</h3>
+        <form id="add-recipe-form">
+            <fieldset>
+                <legend>New recipe</legend>
+                <label for="name">Recipe name</label>
+                <input type="text" name="name" id="name" value="test">
+
+                <label for="description">description</label>
+                <input type="text" name="description" id="description" value="test">
+
+                <label for="link">link for recipe</label>
+                <input type="text" name="link" id="link" value="test">
+
+                <label for="ingredients">ingredients</label>
+                <input type="text" name="ingredients" id="ingredients" value="test">
+
+                <label for="steps">steps</label>
+                <input type="text" name="steps" id="steps" value="test">
+
+                <p>Tags</p>
+                <div class="selection-tag-container"></div>
+                <input type="hidden" name="tags" id="selected-tags">
+
+                <input type="text" id="newTag" placeholder="Add tag" autocomplete="off" enterkeyhint="done">
+                <button type="button" id="addTag">+</button>
+
+                <label for="public">public?</label>
+                <input type="checkbox" name="public" id="public">
+
+                <input type="submit" value="Submit">
+            </fieldset>
+        </form>
+    </div>
+
+    <div class="filter-menu hidden" id="filter-menu">
+        <h3>Filters</h3>
+        <form id="filter-form">
+            <fieldset>
+                <legend>Filter recipes</legend>
+                <div class="selection-tag-container"></div>
+                <input type="hidden" name="tags" id="selected-tags">
+
+                <label for="ingredients">Ingredients</label>
+                <input type="text" name="ingredients" id="ingredients">
+
+                <input type="submit" value="submit">
+            </fieldset>
+        </form>
+    </div>
+
+    <div class="recipe-container" id="recipe-list">
+
+    </div>
+
+    <div id="edit-modal" class="modal">
+        <div class="modal-content">
+            <span class="close-button" id="edit-close-button">&times;</span>
+            <h3>Edit Recipe</h3>
+            <form id="edit-recipe-form">
+                <input type="hidden" id="edit-recipe-id">
+                <label for="edit-recipe-title">Title:</label>
+                <input type="text" id="edit-recipe-title" name="title" required>
+
+                <label for="edit-recipe-description">Description:</label>
+                <textarea id="edit-recipe-description" name="description" required></textarea>
+
+                <label for="edit-recipe-ingredients">Ingredients:</label>
+                <textarea id="edit-recipe-ingredients" name="ingredients" required></textarea>
+
+                <label for="edit-recipe-instructions">Instructions:</label>
+                <textarea id="edit-recipe-instructions" name="instructions" required></textarea>
+
+                <label for="edit-recipe-link">Link:</label>
+                <input type="text" id="edit-recipe-link" name="link">
+
+                <input type="submit" value="Submit">
+            </form>
+        </div>
+
+    </div>
+
+    <script src="assets/shared-state.js"></script>
+    <script src="assets/tags.js"></script>
+    <script src="assets/recipes.js"></script>
+    <script src="assets/users.js"></script>
+</body>
+
+</html>

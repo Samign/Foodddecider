@@ -1,0 +1,9 @@
+redis_data
+pgdata
+ollama_data
+logs
+grafana_data
+prometheus_data
+.env
+raw_data/
+uploads/

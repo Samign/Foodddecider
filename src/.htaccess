@@ -1,0 +1,32 @@
+RewriteEngine On
+RewriteBase /
+
+# Remove trailing slash
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^(.*)/$ /$1 [L]
+
+# Recipe URLs
+RewriteRule ^recipe/([a-zA-Z0-9-]+)$ index.php [L,QSA]
+
+# User profiles
+RewriteRule ^user/([a-zA-Z0-9_]+)$ user.php [L,QSA]
+
+# Protect private folders
+RewriteRule ^includes/ - [F,L]
+
+# Allow real files and directories
+RewriteCond %{REQUEST_FILENAME} -f [OR]
+RewriteCond %{REQUEST_FILENAME} -d
+RewriteRule ^ - [L]
+
+# Send everything else to index
+RewriteRule ^ index.php [L]
+
+# Disable PHP execution
+php_flag engine off
+
+# Disable CGI execution
+Options -ExecCGI
+
+# Treat PHP files as plain text
+AddType text/plain .php
