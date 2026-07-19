@@ -552,7 +552,24 @@ export function closeRecipe() {
 
 // ── Edit ──────────────────────────────────────────────────────────────────────
 
+
+// Todo Create the submitFork function and implement a fork counter in recipe table
+
+async function forkRecipe(recipeId) {
+    grabAndDisplayEdit(recipeId);
+    form.removeEventListener('submit', handleAddRecipe);
+    form.addEventListener('submit', submitFork);
+
+}
+
 async function handleEdit(recipeId) {
+    form.removeEventListener('submit', handleAddRecipe);
+    form.addEventListener('submit', submitEdit);
+    
+    grabAndDisplayEdit(recipeId);
+}
+
+async function grabAndDisplayEdit(recipeId) {
     const recipe = recipesById.get(recipeId);
     if (!recipe) { alert('Recipe not found'); return; }
 
@@ -619,9 +636,6 @@ async function handleEdit(recipeId) {
 
     document.getElementById('expanded-modal').classList.toggle("hidden");
     document.getElementById('add-menu').classList.toggle("hidden");
-
-    form.removeEventListener('submit', handleAddRecipe);
-    form.addEventListener('submit', submitEdit);
 }
 
 async function submitEdit(e) {
@@ -650,6 +664,11 @@ async function submitEdit(e) {
         console.error('Error updating recipe:', error);
         alert('Failed to update recipe: ' + error.message);
     }
+}
+
+async function submitFork() {
+// TODO implement, DO NOT use handle edit as a template, 
+//that function is deprecated and should be updated to new html5 methods
 }
 
 // ── Delete ────────────────────────────────────────────────────────────────────
