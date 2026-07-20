@@ -33,17 +33,21 @@ function addRecipe($recipeData) {
 
         $recipeId = $stmt->fetchColumn();
 
-        if (!empty($recipeData['attributes'])) {
+        if (!empty($recipeData['tags'])) {
             $stmt = $db->prepare("
-                INSERT INTO recipe_attributes (recipe_id, attribute_id)
-                VALUES (:recipe_id, :attribute_id)
+                INSERT INTO recipe_tags (recipe_id, tag_id)
+                VALUES (:recipe_id, :tag_id)
                 ON CONFLICT DO NOTHING
             ");
 
-            foreach ($recipeData['attributes'] as $attributeId) {
+            foreach ($recipeData['tags'] as $tag) {
+                $tagId = ctype_digit((string) $tag)
+                ? (int) $tag
+                : findOrCreateTag($db, (string) $tag);    
+
                 $stmt->execute([
                     ':recipe_id' => $recipeId,
-                    ':attribute_id' => $attributeId
+                    ':tag_id' => $tagId
                 ]);
             }
         }
@@ -160,6 +164,35 @@ function addRecipe($recipeData) {
         echo json_encode(['error' => 'failed to create recipe' . $e]);
     }
 
+}
+
+function slugify(string $string): string {
+    $text = strtolower(trim($string));
+    $text = preg_replace('/[^a-z0-9]+/', '-', $text);
+    return trim($text, '-');
+}
+
+function findOrCreateTag($db, string $tagName): int {
+    $name = trim($tagName);
+    $slug = slugify($name);
+
+    if ($slug === '') {
+        throw new InvalidArgumentException('Invalid tag name');
+    }
+
+    // Check if the tag already exists
+    $stmt = $db->prepare("SELECT id FROM tags WHERE slug = :slug");
+    $stmt->execute([':slug' => $slug]);
+    $existingTagId = $stmt->fetchColumn();
+
+    if ($existingTagId) {
+        return (int)$existingTagId;
+    }
+
+    // If not, create a new tag
+    $stmt = $db->prepare("INSERT INTO tags (name, slug) VALUES (:name, :slug) ON CONFLICT (slug) DO UPDATE SET name = tags.name RETURNING id");
+    $stmt->execute([':name' => $name, ':slug' => $slug]);
+    return (int) $stmt->fetchColumn();
 }
 
 ?>
