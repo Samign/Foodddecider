@@ -122,21 +122,6 @@ function parseIngredient(input) {
     return { raw, amount, unit, size, ingredient, soft };
 }
 
-export function prepareIngredients() { 
-
-    const inputs = document.querySelectorAll(".ingredient-text");
-
-    let parsed = [];
-    
-    inputs.forEach(input => {
-        const value = input.value.trim();
-        if (value !== "") {
-            parsed.push(parseIngredient(value));
-        }
-    });
-    return parsed;
-}
-
 function getLastSection(selector) {
     const sections = document.querySelectorAll(selector);
     return sections.length ? sections[sections.length - 1] : null;
@@ -393,15 +378,6 @@ export async function handleAddRecipe(e) {
 
     const form = e.target;
     const formData = new FormData(form);
-
-    const ingredients = prepareIngredients();
-
-    const steps = formData.getAll('steps[]').filter(step => step.trim() !== '');
-    formData.delete('steps[]');
-    formData.append('steps', JSON.stringify(steps));
-
-    formData.delete('ingredients[]');
-    formData.append('ingredients', JSON.stringify(ingredients));
     
     const response = await fetch('/../api/recipes/add_recipe.php', {
         method: 'POST',

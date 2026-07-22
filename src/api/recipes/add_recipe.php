@@ -4,41 +4,30 @@ require_once __DIR__ . '/../../includes/db.php';
 require_once __DIR__ . '/../../includes/require_login.php';
 require_once __DIR__ . '/../../includes/upload_image.php';
 require_once __DIR__ . '/../../includes/recipe_adder.php';
+require_once __DIR__ . '/../../includes/helpers/recipe_helper.php';
 
-
-$name = $_POST['name'] ?? '';
-$description = $_POST['description'] ?? '';
-$link = $_POST['link'] ?? '';
-$ingredients = $_POST['ingredients'] ?? [];
-$public = $_POST['public'] ?? '0';
-$course = $_POST['course'] ?? '4';
-$prep = $_POST['prep'] ?? '10';
-$cook = $_POST['cook'] ?? '30';
-$picture = $_FILES['picture'] ?? null;
-$servings = $_POST['servings'] ?? null;
-$steps = $_POST['step_sections'] ?? [];
-$ingredients = $_POST['ingredient_sections'] ?? [];
+$input = fetchRecipeInput();
 
 $recipePicture = null;
-if ($picture && !empty($picture['name']) && $picture['error'] === UPLOAD_ERR_OK) {
-    $recipePicture = processRecipeImage(null, $_FILES['picture'], null, "recipe");
+if ($input['picture'] && !empty($input['picture']['name']) && $input['picture']['error'] === UPLOAD_ERR_OK) {
+    $recipePicture = processRecipeImage(null, $input['picture'], null, "recipe");
 }
 
-$attributes = json_decode($_POST['attributes'] ?? '[]', true);
+$tags = json_decode($input['tags'] ?? '[]', true);
 
 addRecipe([
-    'name' => $name,
-    'description' => $description,
-    'link' => $link,
-    'public' => $public,
-    'course' => $course,
-    'prep' => $prep,
-    'cook' => $cook,
+    'name' => $input['name'],
+    'description' => $input['description'],
+    'link' => $input['link'],
+    'public' => $input['public'],
+    'course' => $input['course'],
+    'prep' => $input['prep'],
+    'cook' => $input['cook'],
     'picture' => $recipePicture,
-    'servings' => $servings,
-    'attributes' => $attributes,
-    'steps' => $steps,
-    'ingredients' => $ingredients
+    'servings' => $input['servings'],
+    'tags' => $tags,
+    'steps' => $input['steps'],
+    'ingredients' => $input['ingredients']
 ]);
 
 ?>

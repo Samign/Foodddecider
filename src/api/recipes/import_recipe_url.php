@@ -17,10 +17,18 @@ function parseRecipeFromPythonAPI($targetUrl) {
     $response = curl_exec($ch);
     if (curl_errno($ch)) {
         error_log('cURL error: ' . curl_error($ch));
-        curl_close($ch);
+        // curl_close is deprecated in PHP 8.5; use curl_reset and unset
+        if (function_exists('curl_reset')) {
+            curl_reset($ch);
+        }
+        unset($ch);
         return null;
     }
-    curl_close($ch);
+    // curl_close is deprecated in PHP 8.5; use curl_reset and unset
+    if (function_exists('curl_reset')) {
+        curl_reset($ch);
+    }
+    unset($ch);
 
     $data = json_decode($response, true);
     if (json_last_error() !== JSON_ERROR_NONE) {
@@ -92,10 +100,12 @@ $recipeId = addRecipe([
     'cook' => $llmData['recipe']['cook_time'] ?? null,
     'picture' => null,
     'servings' => $llmData['recipe']['servings'] ?? null,
-    'attributes' => [],
+    'tags' => $llmData['recipe']['tags'] ?? [],
     'steps' => $llmData['recipe']['instructions'] ?? [],
     'ingredients' => $llmData['recipe']['ingredients'] ?? []
 ]);
+
+// TODO Fork recipe function here
 
 $recipePicture = null;
 if (!empty($llmData['recipe']['image_url'])) {
