@@ -642,11 +642,6 @@ async function submitEdit(e) {
     e.preventDefault();
     const form      = e.target;
     const recipeId  = parseInt(form.dataset.id);
-    const formData  = new FormData(form);
-    const ingredients = prepareIngredients();
-
-    formData.delete('ingredients[]');
-    formData.append('ingredients', JSON.stringify(ingredients));
 
     try {
         const response = await fetch(`/../api/recipes/update_recipe.php?id=${recipeId}`, {

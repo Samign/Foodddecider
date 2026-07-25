@@ -105,19 +105,20 @@ $recipeId = addRecipe([
     'ingredients' => $llmData['recipe']['ingredients'] ?? []
 ]);
 
-// TODO Fork recipe function here
 
 $recipePicture = null;
 if (!empty($llmData['recipe']['image_url'])) {
     $recipePicture = processRecipeImage($llmData['recipe']['image_url'], null, $recipeId, "recipe");
-}
-
-$db = db();
-$stmt = $db->prepare("UPDATE recipes SET image_base = :image_base WHERE id = :id");
-$stmt->execute([
-    ':image_base' => $recipePicture,
-    ':id' => $recipeId,
-]);
+    }
+    
+    $db = db();
+    $stmt = $db->prepare("UPDATE recipes SET image_base = :image_base WHERE id = :id");
+    $stmt->execute([
+        ':image_base' => $recipePicture,
+        ':id' => $recipeId,
+    ]);
+        
+// TODO Fork recipe function here
 
 echo json_encode(['success' => true, 'recipe_id' => $recipeId]);
 
