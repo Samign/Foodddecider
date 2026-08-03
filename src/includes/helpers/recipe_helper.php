@@ -1,5 +1,19 @@
 <?php
 
+function extractSourceKey(string $url): ?string {
+    $host = parse_url(trim($url), PHP_URL_HOST);
+    if (!$host) {
+        return null;
+    }
+
+    $host = strtolower($host);
+    $host = preg_replace('/^www\./', '', $host);
+
+    return filter_var($host, FILTER_VALIDATE_DOMAIN, FILTER_FLAG_HOSTNAME)
+        ? $host
+        : null;
+}
+
 function fetchRecipeInput() {
     return [
         'name' => $_POST['name'] ?? '',
@@ -13,7 +27,8 @@ function fetchRecipeInput() {
         'servings' => $_POST['servings'] ?? null,
         'steps' => $_POST['step_sections'] ?? [],
         'ingredients' => $_POST['ingredient_sections'] ?? [],
-        'tags' => $_POST['tags'] ?? []
+        'tags' => $_POST['tags'] ?? [],
+        'forked_from_recipe_id' => $_POST['forked_from_recipe_id'] ?? null
     ];
 }
 

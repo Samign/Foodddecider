@@ -13,10 +13,22 @@ function addRecipe($recipeData) {
 
         $stmt = $db->prepare("
             INSERT INTO recipes 
-            (title, owner_id, description, link, is_public, course_types, prep_time_minutes, cook_time_minutes, image_base, servings) 
-            values(:title, :owner_id, :description, :link, :is_public, :course_types, :prep_time, :cook_time, :image_base, :servings)
+            (title, owner_id, description, link, is_public, course_types, prep_time_minutes, cook_time_minutes, image_base, servings, source_id, forked_from_recipe_id) 
+            values(:title, :owner_id, :description, :link, :is_public, :course_types, :prep_time, :cook_time, :image_base, :servings, :source_id, :forked_from_recipe_id)
             RETURNING id
         ");
+
+        $source_key = extractSourceKey($recipeData['link'] ?? null);
+
+        $source_stmt = $db->prepare("SELECT id FROM sources WHERE slug = :slug");
+        $source_stmt->execute([':slug' => $source_key]);
+        $source_id = $source_stmt->fetchColumn();
+
+        if ($source_id === false || $source_id === null) {
+            $insert_source_stmt = $db->prepare("INSERT INTO sources (slug, display_name) VALUES (:slug, :display_name§) RETURNING id");
+            $insert_source_stmt->execute([':slug' => $source_key, ':display_name' => ucfirst($source_key)]);
+            $source_id = $insert_source_stmt->fetchColumn();
+        }
 
         $stmt->execute([
             ':title' => $recipeData['name'] ?? 'Untitled Recipe',
@@ -28,7 +40,9 @@ function addRecipe($recipeData) {
             ':prep_time' => $recipeData['prep'] ?? '10',
             ':cook_time' => $recipeData['cook'] ?? '30',
             ':image_base' => $recipeData['picture'] ?? null,
-            ':servings' => $recipeData['servings'] ?? null
+            ':source_id' => $source_id,
+            ':servings' => $recipeData['servings'] ?? null,
+            ':forked_from_recipe_id' => $recipeData['forked_from_recipe_id'] ?? null
         ]);
 
         $recipeId = $stmt->fetchColumn();

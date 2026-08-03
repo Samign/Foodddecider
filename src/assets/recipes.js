@@ -661,9 +661,30 @@ async function submitEdit(e) {
     }
 }
 
-async function submitFork() {
-// TODO implement, DO NOT use handle edit as a template, 
-//that function is deprecated and should be updated to new html5 methods
+async function submitFork(e) {
+    e.preventDefault();
+    const form      = e.target;
+    const recipeId  = parseInt(form.dataset.id);
+
+    const formData = new FormData(form);
+    formData.append('forked_from_recipe_id', recipeId);
+
+    try {
+        const response = await fetch(`/../api/recipes/recipe_adder.php`, {
+            method: 'POST',
+            body: formData
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Failed to fork recipe');
+
+        recipesById.set(result.recipe.id, result.recipe);
+        renderRecipes();
+        document.getElementById('add-menu').classList.toggle("hidden");
+        showNotification('Recipe forked successfully');
+    } catch (error) {
+        console.error('Error forking recipe:', error);
+        alert('Failed to fork recipe: ' + error.message);
+    }
 }
 
 // ── Delete ────────────────────────────────────────────────────────────────────

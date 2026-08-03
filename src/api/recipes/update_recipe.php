@@ -27,6 +27,7 @@ if (!$recipe) {
     echo json_encode(['error' => 'Recipe not found']);
     exit;
 }
+
 if ($recipe['owner_id'] != $user_id) {
     http_response_code(403);
     echo json_encode(['error' => 'You do not have permission to update this recipe']);
@@ -54,7 +55,8 @@ try {
             course_types         = :course_types,
             prep_time_minutes    = :prep_time,
             cook_time_minutes    = :cook_time,
-            servings             = :servings
+            servings             = :servings,
+            source_id            = :source_id
             $imageClause
         WHERE id = :recipe_id
     ");
@@ -68,6 +70,7 @@ try {
         ':prep_time'    => $input['prep'],
         ':cook_time'    => $input['cook'],
         ':servings'     => $input['servings'],
+        ':source_id'    => $input['source_id'] ?? null,
         ':recipe_id'    => $recipe_id,
     ];
     if ($recipePicture !== null) {

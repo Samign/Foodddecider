@@ -27,7 +27,8 @@ addRecipe([
     'servings' => $input['servings'],
     'tags' => $tags,
     'steps' => $input['steps'],
-    'ingredients' => $input['ingredients']
+    'ingredients' => $input['ingredients'],
+    'forked_from_recipe_id' => $input['forked_from_recipe_id'] ?? null
 ]);
 
 ?>
