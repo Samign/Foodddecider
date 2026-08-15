@@ -258,6 +258,8 @@ function getRecipeHtml(recipe) {
                     src="/uploads/profile_pictures/${recipe.owner_image ? recipe.owner_image + '.webp' : recipe.owner_username + '_avatar.svg'}"
                     alt="Owner Image">
             </a>
+            ${recipe.source ? '' :
+            `<div class="source-info">source: ${recipe.source}</div>`}
             <div class="recipe-image-container">${getRecipeImage(recipe)}</div>
             <div class="recipe-content">
                 <div class="course-type ${courseType}">${courseType}</div>
