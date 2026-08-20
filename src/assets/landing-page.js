@@ -2,15 +2,18 @@ let loginModal = null;
 let loginModalExpanded = false;
 let personalRecipeButton = null;
 
-document.addEventListener('DOMContentLoaded', async () => {
-    const personalRecipeButton = document.getElementById("personal-recipes");
+export function init(targetElement) {
+    personalRecipeButton = targetElement.querySelector("#personal-recipes");
     if (personalRecipeButton) {
         personalRecipeButton.classList.remove('active');
-        const publicRecipeButton = document.getElementById("public-recipes");
+        const publicRecipeButton = targetElement.querySelector("#public-recipes");
         publicRecipeButton.classList.add('active');
     }
+
+    loginModal = targetElement;
+
     initEventListeners();
-    const signupForm = document.getElementById('signup-form');
+    const signupForm = targetElement.querySelector('#signup-form');
     
     signupForm.addEventListener('submit', async (e) => {
         e.preventDefault();
@@ -26,12 +29,10 @@ document.addEventListener('DOMContentLoaded', async () => {
             alert('Signup failed');
         }
     });
-});
+};
 
-function initEventListeners(personalRecipeButton) {
-    loginModal = document.getElementById("login-modal");
-    
-    document.getElementById("log-in").addEventListener('click', toggleLogin);
+function initEventListeners() {
+    document.getElementById('log-in').addEventListener('click', toggleLogin);
     if (personalRecipeButton) {
         personalRecipeButton.addEventListener('click', toggleLogin);
     }

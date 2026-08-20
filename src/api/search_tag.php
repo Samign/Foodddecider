@@ -16,4 +16,3 @@ $stmt = $pdo->prepare('
 
 $stmt->execute([':prefix' => slugify($q)]);
 echo json_encode($stmt->fetchAll(PDO::FETCH_ASSOC));
-?>

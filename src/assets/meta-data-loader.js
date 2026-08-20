@@ -21,9 +21,9 @@ async function loadTags() {
         window.metadata.courseTypes.set(courseType.id, courseType);
     });
 
-    metadata.attributes.forEach(attribute => {
-        window.metadata.attributes.set(attribute.id, attribute);
-    });
+    // metadata.attributes.forEach(attribute => {
+    //     window.metadata.attributes.set(attribute.id, attribute);
+    // });
 
     renderRecipeMetaData(metadata);
 }

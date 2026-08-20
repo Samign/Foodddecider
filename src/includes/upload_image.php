@@ -1,6 +1,6 @@
 <?php
 
-function processRecipeImage(?string $imageUrl, ?array $uploadedFile, ?int $recipeId, string $imageType): ?string
+function processRecipeImage(?string $imageUrl, ?array $uploadedFile, string|int|null $recipeId, string $imageType): ?string
 {
     if (!$imageUrl && !$uploadedFile) {
         return null;
@@ -26,11 +26,8 @@ function processRecipeImage(?string $imageUrl, ?array $uploadedFile, ?int $recip
 
         if (curl_errno($ch)) {
             error_log('cURL error: ' . curl_error($ch));
-            curl_close($ch);
             return null;
         }
-
-        curl_close($ch);
     }
 
     if (!$imageData) {
@@ -72,9 +69,6 @@ function processRecipeImage(?string $imageUrl, ?array $uploadedFile, ?int $recip
     }
 
     imagewebp($img, $outputPath, 80);
-    imagedestroy($img);
 
     return $basePath;
 }
-
-?>

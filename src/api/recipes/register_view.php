@@ -48,4 +48,3 @@ try {
     $db->rollBack();
     throw $e;
 }
-?>

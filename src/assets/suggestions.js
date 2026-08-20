@@ -18,7 +18,8 @@ function parseIngredientInput(raw) {
     };
 }
 
-document.addEventListener('DOMContentLoaded', () => {
+export function init(targetElement) {
+    console.log("suggestions.js loaded");
     document.addEventListener("input", async function(e) {
         if (!e.target.classList.contains("ingredient-text")) return;
         const raw = e.target.value.trim();
@@ -26,7 +27,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const { query } = parseIngredientInput(raw);
         if (query.length < 2) return clearSuggestions(e.target);
 
-        const res = await fetch(`../api/search_ingredients.php?q=${encodeURIComponent(query)}`);
+        const res = await fetch(`/api/search_ingredients.php?q=${encodeURIComponent(query)}`);
         const data = await res.json();
         showSuggestions(e.target, data, raw, query);
     });
@@ -69,7 +70,7 @@ document.addEventListener('DOMContentLoaded', () => {
             document.querySelectorAll(".autocomplete-list").forEach(l => l.innerHTML = "");
         }
     });
-});
+};
 
 function showSuggestions(input, items, raw, ingredientQuery) {
     const list = getList(input);

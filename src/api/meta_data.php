@@ -13,12 +13,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     SELECT json_build_object(
         'courseTypes',
          (SELECT json_agg(ct order by ct.display_order)
-          FROM course_types ct),
-        'attributes',
-         (SELECT json_agg(a order by a.display_order)
-          FROM attributes a)
+          FROM course_types ct)
     ) AS form_metadata
     ");
+
+    // SELECT json_build_object(
+    //     'courseTypes',
+    //      (SELECT json_agg(ct order by ct.display_order)
+    //       FROM course_types ct),
+    //     'attributes',
+    //      (SELECT json_agg(a order by a.display_order)
+    //       FROM attributes a)
+    // ) AS form_metadata
+    // ");
 
     $stmt->execute();
 
@@ -51,4 +58,3 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         'name' => trim($data['name'])
     ]);
 }
-?>

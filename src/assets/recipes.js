@@ -1,4 +1,4 @@
-import { addIngredient, addStep, updateStepNumbers, prepareIngredients, handleAddRecipe, handleAddFromUrl } from "./add-recipe.js";
+import { addIngredient, addStep, updateStepNumbers, handleAddRecipe, handleAddFromUrl } from "./add-recipe.js";
 import { setCurrentExpanded } from "./popstate.js";
 import { showLoadedpreview } from "./drag-and-drop.js";
 
@@ -44,7 +44,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (recipeMatch) {
         window.history.replaceState({ type: 'home' }, '', '/');
         const recipeId = recipeMatch[1];
-        const response = await fetch('/../api/recipes/fetch_recipes.php', {
+        const response = await fetch('/api/recipes/fetch_recipes.php', {
             method: 'POST',
             body: new URLSearchParams({ id: recipeId })
         });
@@ -208,7 +208,7 @@ async function loadRecipes() {
         formData.append('order_by', 'views');
     }
 
-    const response = await fetch('/../api/recipes/fetch_recipes.php', {
+    const response = await fetch('/api/recipes/fetch_recipes.php', {
         method: 'POST',
         body: formData
     });
@@ -222,7 +222,7 @@ async function randomRecipe() {
     const formData = new FormData(document.getElementById("filter-form"));
     formData.append('action', 'random');
 
-    const response = await fetch('/../api/recipes/fetch_recipes.php', {
+    const response = await fetch('/api/recipes/fetch_recipes.php', {
         method: 'POST',
         body: formData
     });
@@ -646,7 +646,7 @@ async function submitEdit(e) {
     const recipeId  = parseInt(form.dataset.id);
 
     try {
-        const response = await fetch(`/../api/recipes/update_recipe.php?id=${recipeId}`, {
+        const response = await fetch(`/api/recipes/update_recipe.php?id=${recipeId}`, {
             method: 'POST',
             body: formData
         });
@@ -672,7 +672,7 @@ async function submitFork(e) {
     formData.append('forked_from_recipe_id', recipeId);
 
     try {
-        const response = await fetch(`/../api/recipes/recipe_adder.php`, {
+        const response = await fetch(`/api/recipes/recipe_adder.php`, {
             method: 'POST',
             body: formData
         });
@@ -694,7 +694,7 @@ async function submitFork(e) {
 async function handleDelete(recipeId) {
     if (!confirm('Are you sure you want to delete this recipe?')) return;
 
-    const response = await fetch(`/../api/recipes/delete_recipe.php?recipe_id=${recipeId}`);
+    const response = await fetch(`/api/recipes/delete_recipe.php?recipe_id=${recipeId}`);
     const result   = await response.json();
 
     if (result.success) {
@@ -709,7 +709,7 @@ async function handleDelete(recipeId) {
 
 async function handleSave(recipeId, element) {
     element?.classList.toggle('filled');
-    const response = await fetch('/../api/recipes/save_recipe.php', {
+    const response = await fetch('/api/recipes/save_recipe.php', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ recipe_id: recipeId })

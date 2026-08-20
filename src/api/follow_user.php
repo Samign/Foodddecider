@@ -58,6 +58,3 @@ if ($followCheck) {
         echo json_encode(['error' => 'Failed to follow user']);
     }
 }
-
-
-?>

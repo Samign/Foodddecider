@@ -3,7 +3,7 @@
 function extractSourceKey(string $url): ?string {
     $host = parse_url(trim($url), PHP_URL_HOST);
     if (!$host) {
-        return null;
+        return '';
     }
 
     $host = strtolower($host);
@@ -11,7 +11,7 @@ function extractSourceKey(string $url): ?string {
 
     return filter_var($host, FILTER_VALIDATE_DOMAIN, FILTER_FLAG_HOSTNAME)
         ? $host
-        : null;
+        : '';
 }
 
 function fetchRecipeInput() {
@@ -279,7 +279,3 @@ function saveIngredientSections(PDO $db, int $recipeId, array $ingredientSection
         }
     }
 }
-
-
-
-?>

@@ -127,30 +127,30 @@ function getLastSection(selector) {
     return sections.length ? sections[sections.length - 1] : null;
 }
 
-document.addEventListener('DOMContentLoaded', () => {
+export function init(targetElement) {
 
-    const ingredientSuggestions = document.querySelector('.autocomplete-list');
+    const ingredientSuggestions = targetElement.querySelector('.autocomplete-list');
 
-    const add_button = document.getElementById('add-button');
+    const add_button = document.querySelector('#add-button');
     
     if (add_button) {
         add_button.menu = "add-choice";
         add_button.addEventListener('click', toggleHidden);
         
-        const manual_button = document.getElementById('add-manually');
+        const manual_button = document.querySelector('#add-manually');
         manual_button.menu = "add-menu";
         manual_button.addEventListener('click', toggleHidden);
 
-        const url_button = document.getElementById('add-from-url');
+        const url_button = document.querySelector('#add-from-url');
         url_button.menu = "add-from-url-modal";
         url_button.addEventListener('click', toggleHidden);
     }
 
-    const recipePublicButtonContainer = document.getElementById("public-checkbox-container");
+    const recipePublicButtonContainer = targetElement.querySelector("#public-checkbox-container");
     if (recipePublicButtonContainer) {
-        const publicCheckbox = document.getElementById('save-as-public');
-        const privateButton = document.getElementById('private');
-        const publicButton = document.getElementById('public');
+        const publicCheckbox = targetElement.querySelector('#save-as-public');
+        const privateButton = targetElement.querySelector('#private');
+        const publicButton = targetElement.querySelector('#public');
         
         recipePublicButtonContainer.addEventListener('click', (e) => {
             if (e.target.classList.contains('private-button')) {
@@ -165,27 +165,27 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    const addStepButton = document.getElementById("add-step");
+    const addStepButton = targetElement.querySelector("#add-step");
     if (addStepButton) {
         addStepButton.addEventListener('click', () => addStep(lastSelectedInstructionBox || lastSelectedInstructionSection));
     }
     
-    const addStepSectionButton = document.getElementById("add-step-section");
+    const addStepSectionButton = targetElement.querySelector("#add-step-section");
     if (addStepSectionButton) {
         addStepSectionButton.addEventListener('click', () => addStepSection());
     }
 
-    const addIngredientSectionButton = document.getElementById("add-ingredient-section");
+    const addIngredientSectionButton = targetElement.querySelector("#add-ingredient-section");
     if (addIngredientSectionButton) {
         addIngredientSectionButton.addEventListener('click', () => addIngredientSection());
     }
 
-    const addIngredientButton = document.getElementById("add-ingredient");
+    const addIngredientButton = targetElement.querySelector("#add-ingredient");
     if (addIngredientButton) {
         addIngredientButton.addEventListener('click', () => addIngredient(lastSelectedIngredientItem || lastSelectedIngredientSection));
     }
 
-    const ingredientsElement = document.getElementById('ingredients');
+    const ingredientsElement = targetElement.querySelector('#ingredients');
     if (ingredientsElement) {
         ingredientsElement.addEventListener('click', (e) => {
             const section = e.target.closest('.section-group');
@@ -224,7 +224,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    const instructionsElement = document.getElementById('instructions');
+    const instructionsElement = targetElement.querySelector('#instructions');
     if (instructionsElement) {
         instructionsElement.addEventListener('click', (e) => {
             const section = e.target.closest('.section-group');
@@ -251,8 +251,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
     }
-
-});
+};
 
 function addStepSection() {
     const i = stepSectionCount++;
@@ -379,7 +378,7 @@ export async function handleAddRecipe(e) {
     const form = e.target;
     const formData = new FormData(form);
     
-    const response = await fetch('/../api/recipes/add_recipe.php', {
+    const response = await fetch('/api/recipes/add_recipe.php', {
         method: 'POST',
         body: formData
     });
@@ -403,7 +402,7 @@ export async function handleAddFromUrl(e) {
     const form = e.target;
     const formData = new FormData(form);
     
-    const response = await fetch('/../api/recipes/import_recipe_url.php', {
+    const response = await fetch('/api/recipes/import_recipe_url.php', {
         method: 'POST',
         body: formData
     });

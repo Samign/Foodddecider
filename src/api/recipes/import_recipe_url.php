@@ -82,4 +82,3 @@ $stmt->execute([
 ]);
 
 echo json_encode(['success' => true, 'recipe_id' => $recipeId]);
-?>

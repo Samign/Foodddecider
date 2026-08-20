@@ -18,14 +18,14 @@ function addRecipe($recipeData) {
             RETURNING id
         ");
 
-        $source_key = extractSourceKey($recipeData['link'] ?? null);
+        $source_key = extractSourceKey($recipeData['link'] ?? '');
 
         $source_stmt = $db->prepare("SELECT id FROM sources WHERE slug = :slug");
         $source_stmt->execute([':slug' => $source_key]);
         $source_id = $source_stmt->fetchColumn();
 
         if ($source_id === false || $source_id === null) {
-            $insert_source_stmt = $db->prepare("INSERT INTO sources (slug, display_name) VALUES (:slug, :display_name§) RETURNING id");
+            $insert_source_stmt = $db->prepare("INSERT INTO sources (slug, display_name) VALUES (:slug, :display_name) RETURNING id");
             $insert_source_stmt->execute([':slug' => $source_key, ':display_name' => ucfirst($source_key)]);
             $source_id = $insert_source_stmt->fetchColumn();
         }
@@ -70,5 +70,3 @@ function addRecipe($recipeData) {
     }
 
 }
-
-?>

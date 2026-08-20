@@ -366,5 +366,4 @@ function titleInput($name){
     </div>
     <?php
 }
-
 ?>

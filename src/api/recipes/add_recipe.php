@@ -13,7 +13,8 @@ if ($input['picture'] && !empty($input['picture']['name']) && $input['picture'][
     $recipePicture = processRecipeImage(null, $input['picture'], null, "recipe");
 }
 
-$tags = json_decode($input['tags'] ?? '[]', true);
+// $tags = json_decode($input['tags'] ?? '[]', true);
+//     'tags' => $tags,
 
 addRecipe([
     'name' => $input['name'],
@@ -25,10 +26,7 @@ addRecipe([
     'cook' => $input['cook'],
     'picture' => $recipePicture,
     'servings' => $input['servings'],
-    'tags' => $tags,
     'steps' => $input['steps'],
     'ingredients' => $input['ingredients'],
     'forked_from_recipe_id' => $input['forked_from_recipe_id'] ?? null
 ]);
-
-?>

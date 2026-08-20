@@ -27,4 +27,3 @@ $stmt->bindValue(':recipe_id', $recipe_id);
 $stmt->execute();
 
 echo json_encode(['status' => 'saved']);
-?>

@@ -40,4 +40,3 @@ if ($params['user']) {
         category: $params['category']
     );
 }
-?>

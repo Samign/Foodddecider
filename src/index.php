@@ -11,22 +11,19 @@ $requestUri = trim($requestUri, '/');
 
 $userLoggedIn = isset($_SESSION['user_id']);
 
-// Fix a getRecipeById
+echo '<pre>';
+echo 'Session ID: ' . session_id() . "\n";
+echo 'Session Data: ';
+var_dump($_SESSION);
+var_dump($userLoggedIn);
+echo '</pre>';
+
 if (preg_match('/\/recipe\/(\d+)/', $requestUri, $matches)) {
     $recipeId = filter_var($matches[1], FILTER_VALIDATE_INT);
     if ($recipeId) {
         $recipe = getRecipeById($recipeId);
     }
 }
-
-// TODO implement parse user url (Do I even want to?)
-// Could be nice in the future
-// if (preg_match('/\/user\/(\w+)/', $requestUri, $matches)) {
-//     $username = filter_var($matches[1], FILTER_SANITIZE_STRING);
-//     if ($username) {
-//         $user = grabUserInfoByUsername($username);
-//     }
-// }
 
 ?>
 
@@ -77,22 +74,15 @@ if (preg_match('/\/recipe\/(\d+)/', $requestUri, $matches)) {
             </div>
             <button class="add-button" id="add-button"><span class="material-symbols-outlined">add</span>Add new recipe</button>
         </div>
-    <div class="recipe-card-container" id="recipe-list"></div>
+        <div class="recipe-card-container" id="recipe-list"></div>
+    </div>
 
     <?php if(!$userLoggedIn) {
         echo getLoginModal();
     } else {
         echo addEditModal();
     } ?>
-    <?php if(!$userLoggedIn): ?>
-        <script type="module" src="/assets/landing-page.js"></script> 
-    <?php else: ?>
-        <script type="module" src="/assets/drag-and-drop.js"></script>
-        <script type="module" src="/assets/add-recipe.js"></script>
-    <?php endif; ?>
-    <script type="module" src="/assets/suggestions.js"></script>
-    <script type="module" src="/assets/meta-data-loader.js"></script>
-    <script type="module" src="/assets/recipes.js"></script>
-    <script type="module" src="/assets/popstate.js"></script>
+    
+    <script type="module" src="/assets/main.js"></script>
 </body>
 </html>

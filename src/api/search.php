@@ -72,6 +72,3 @@ echo json_encode([
     'recipes' => $results,
     'users' => $user_results
 ]);
-
-
-?>

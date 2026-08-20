@@ -17,5 +17,3 @@ function validate_uuid($uuid) {
 
     return strtolower($uuid);
 }
-
-?>

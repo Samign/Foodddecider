@@ -27,5 +27,3 @@ function grabUserInfo($requested_user_UUID = null, $requested_user_username = nu
         echo json_encode(['error' => 'Failed to fetch user data ' . $e->getMessage()]);
     }
 }
-
-?>

@@ -1,5 +1,4 @@
-<?php 
-
+<?php
 function env(string $key, bool $required = true): string
 {
     $value = getenv($key);
@@ -10,4 +9,3 @@ function env(string $key, bool $required = true): string
 
     return $value;
 }
-?>

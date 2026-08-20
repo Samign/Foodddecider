@@ -25,6 +25,23 @@ function getRecipeById(
     }
     $db = db();
     
+
+    // -- attributes
+    // LEFT JOIN LATERAL (
+    //     SELECT json_agg(
+    //         json_build_object(
+    //             'id', a.id,
+    //             'name', a.name
+    //         )
+    //         ORDER BY a.name
+    //     ) AS attributes
+    //     FROM recipe_attributes ra
+    //     JOIN attributes a ON ra.attribute_id = a.id
+    //     WHERE ra.recipe_id = r.id
+    // ) attr ON true
+
+    // COALESCE(attr.attributes, '[]'::json) AS attributes, 
+
     $sql = "
         SELECT 
             r.id,
@@ -46,7 +63,6 @@ function getRecipeById(
             u.username AS owner_username,
             u.image_base AS owner_image,
         
-            COALESCE(attr.attributes, '[]'::json) AS attributes,
             COALESCE(steps.recipe_steps, '[]'::json) AS recipe_steps,
             COALESCE(ingredients.recipe_ingredients, '[]'::json) AS recipe_ingredients,
             COALESCE(macros.ingredient_macros, '[]'::json) AS ingredient_macros,
@@ -64,20 +80,6 @@ function getRecipeById(
         
         LEFT JOIN saved_recipes sr 
             ON r.id = sr.recipe_id
-        
-        -- attributes
-        LEFT JOIN LATERAL (
-            SELECT json_agg(
-                json_build_object(
-                    'id', a.id,
-                    'name', a.name
-                )
-                ORDER BY a.name
-            ) AS attributes
-            FROM recipe_attributes ra
-            JOIN attributes a ON ra.attribute_id = a.id
-            WHERE ra.recipe_id = r.id
-        ) attr ON true
         
         -- steps
         LEFT JOIN LATERAL (
@@ -201,13 +203,13 @@ function getRecipeById(
     }
 
     // Attributes
-    if (!empty($attributes_filter)) {
-        $sql .= " AND r.id IN (
-            SELECT recipe_id FROM recipe_attributes
-            WHERE attribute_id = ANY(:attributes)
-            HAVING COUNT(DISTINCT attribute_id) >= 1
-        ) ";
-    }
+    // if (!empty($attributes_filter)) {
+    //     $sql .= " AND r.id IN (
+    //         SELECT recipe_id FROM recipe_attributes
+    //         WHERE attribute_id = ANY(:attributes)
+    //         HAVING COUNT(DISTINCT attribute_id) >= 1
+    //     ) ";
+    // }
 
     // Course type
     if ($course_type) {
@@ -308,5 +310,3 @@ function getRecipeById(
         return $result;
     }
 }
-
-?>

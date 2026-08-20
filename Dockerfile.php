@@ -1,5 +1,6 @@
-FROM php:8.2-apache
+FROM php:8.2-fpm
 
+# Install dependencies needed for Postgres, GD, and Imagick
 RUN apt-get update && apt-get install -y \
     libpq-dev \
     libpng-dev \
@@ -23,11 +24,13 @@ RUN apt-get update && apt-get install -y \
     && docker-php-ext-enable imagick \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
-RUN a2enmod rewrite
 
+# Set standard PHP configurations
 RUN echo "upload_max_filesize = 16M\npost_max_size = 16M" > /usr/local/etc/php/conf.d/uploads.ini
 
+WORKDIR /var/www/html
 
 COPY . /var/www/html/
 
-EXPOSE 80
+# PHP-FPM natively communicates on port 9000
+EXPOSE 9000

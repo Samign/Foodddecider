@@ -4,12 +4,16 @@ let preview = null;
 let uploadContent = null;
 let uploadLabel = null;
 
-document.addEventListener('DOMContentLoaded', () => {
-    fileInput = document.getElementById("picture");
-    uploadBox = document.getElementById("uploadBox");
-    preview = document.getElementById("preview");
-    uploadContent = document.getElementById("uploadContent");
-    uploadLabel = document.querySelector(".upload-label");
+console.log("drag-and-drop.js loaded");
+
+export function init(targetElement) {
+    fileInput = targetElement.querySelector('#picture');
+    uploadBox = targetElement.querySelector('#uploadBox');
+    preview = targetElement.querySelector('#preview');
+    uploadContent = targetElement.querySelector('#uploadContent');
+    uploadLabel = targetElement.querySelector('.upload-label');
+
+    console.log("uploadbox: ", uploadBox);
 
     fileInput.addEventListener("change", handleFile);
     
@@ -32,7 +36,7 @@ document.addEventListener('DOMContentLoaded', () => {
             showPreview(file);
         }
     });
-});
+};
 
 
 function handleFile() {
