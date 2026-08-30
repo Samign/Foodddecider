@@ -165,6 +165,59 @@ export function init(targetElement) {
         });
     }
 
+    // Move to suggestions.js
+    // const tagSearchInput = targetElement.querySelector("#tag_search");
+    // if (tagSearchInput) {
+    //     tagSearchInput.addEventListener('input', async (e) => {
+    //         const query = e.target.value.trim();
+    //         if (query.length < 2) return;
+
+    //         const res = await fetch(`/api/search_tags.php?q=${encodeURIComponent(query)}`);
+    //         const data = await res.json();
+    //         showTagSuggestions(e.target, data, query);
+    //     });
+    // }
+
+    const addTagButton = targetElement.querySelector("#add-tag");
+    if (addTagButton) {
+        addTagButton.addEventListener('click', () => {
+            const tagSearchInput = targetElement.querySelector(".tag_search");
+            const tagName = tagSearchInput.value.trim();
+            if (!tagName) return;
+
+            // const tagId = tagSearchInput.dataset.tagId || null;
+            const tagsContainer = targetElement.querySelector(".tags");
+
+            const tagDiv = document.createElement("div");
+            tagDiv.className = "tag-item";
+            const span = document.createElement("span");
+            span.textContent = tagName;
+            tagDiv.appendChild(span);
+
+            const input = document.createElement("input");
+            input.type = "hidden";
+            input.name = "tags[]";
+            // input.value = tagId ? tagId : '';
+            input.value = tagName;
+            tagDiv.appendChild(input);
+
+            const removetagButton = document.createElement("button");
+            removetagButton.type = "button";
+            removetagButton.className = "remove-tag";
+            removetagButton.textContent = "x";
+            tagDiv.appendChild(removetagButton);
+
+            tagsContainer.appendChild(tagDiv);
+            tagSearchInput.value = "";
+            tagSearchInput.dataset.tagId = "";
+
+            const removetagsButton = tagDiv.querySelector(".remove-tag");
+            removetagsButton.addEventListener('click', () => {
+                tagDiv.remove();
+            });
+        });
+    }
+
     const addStepButton = targetElement.querySelector("#add-step");
     if (addStepButton) {
         addStepButton.addEventListener('click', () => addStep(lastSelectedInstructionBox || lastSelectedInstructionSection));

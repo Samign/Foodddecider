@@ -16,14 +16,14 @@ INSERT INTO course_types (name, display_order) VALUES
 ON CONFLICT (name) DO NOTHING;
 
 -- ── Attributes ────────────────────────────────────────────────
-INSERT INTO attributes (name, display_order) VALUES
-    ('Vegan',        1),
-    ('Quick',        2),
-    ('Vegetarian',   3),
-    ('Gluten-Free',  4),
-    ('High Protein', 5),
-    ('Dairy-Free',   6),
-    ('Low-Carb',     7)
+INSERT INTO tags (name, slug, is_featured, display_order) VALUES
+    ('Vegan',        'vegan',        true,  1),
+    ('Quick',        'quick',        true,  2),
+    ('Vegetarian',   'vegetarian',   true,  3),
+    ('Gluten-Free',  'gluten-free',  true,  4),
+    ('High Protein', 'high-protein', true,  5),
+    ('Dairy-Free',   'dairy-free',   true,  6),
+    ('Low-Carb',     'low-carb',     true,  7)
 ON CONFLICT DO NOTHING;
 
 -- ── Ingredients ───────────────────────────────────────────────

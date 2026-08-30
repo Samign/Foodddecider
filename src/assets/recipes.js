@@ -462,7 +462,7 @@ export function expandRecipe(recipeId) {
     const description    = expandedModal.querySelector('.recipe-description');
     const steps          = expandedModal.querySelector('.steps');
     const time           = expandedModal.querySelector('.recipe-time');
-    const attributes     = expandedModal.querySelector('.recipe-attribues');
+    const tags           = expandedModal.querySelector('.recipe-tags');
     const recipeOwner    = expandedModal.querySelector('.recipe-owner');
     // const servings       = expandedModal.querySelector('.ingredient-servings');
 
@@ -485,8 +485,8 @@ export function expandRecipe(recipeId) {
             </div>
         </a>`;
 
-    attributes.innerHTML = recipe.attributes
-        ? JSON.parse(recipe.attributes).map(a => `<span class="pill">${a.name}</span>`).join('')
+    tags.innerHTML = recipe.tags
+        ? JSON.parse(recipe.tags).map(t => `<span class="pill">${t.name}</span>`).join('')
         : '';
 
     time.innerHTML = `
@@ -590,17 +590,17 @@ async function grabAndDisplayEdit(recipeId) {
     const courseTypeSelect = form.querySelector('#course');
     if (recipe.course_types) courseTypeSelect.value = recipe.course_types;
 
-    if (recipe.attributes) {
-        const recipeAttributes = JSON.parse(recipe.attributes).map(a => a.id);
-        for (const attr of form.querySelector('.attributes').children) {
-            if (recipeAttributes.includes(parseInt(attr.dataset.id))) {
-                attr.classList.add('selected');
+    if (recipe.tags) {
+        const recipeTags = JSON.parse(recipe.tags).map(t => t.id);
+        for (const tag of form.querySelector('.tags').children) {
+            if (recipeTags.includes(parseInt(tag.dataset.id))) {
+                tag.classList.add('selected');
             }
         }
     }
 
-    form.querySelector('#selected-attributes').value = JSON.stringify(
-        [...form.querySelectorAll('.attribute.selected')].map(el => el.dataset.id)
+    form.querySelector('#selected-tags').value = JSON.stringify(
+        [...form.querySelectorAll('.tag.selected')].map(el => el.dataset.id)
     );
 
     showLoadedpreview(recipe.image_base ? `/uploads/recipe_pictures/${recipe.image_base}.webp` : '');

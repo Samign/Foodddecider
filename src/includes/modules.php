@@ -153,12 +153,12 @@ function getFilterMenu()
                     <div class="course-types-container">
                         <p>Course types</p>
                     </div>
-                    <div class="attributes-container">
-                        <p>Attributes</p>
-                        <div class="attributes"></div>
+                    <div class="tags-container">
+                        <p>Tags</p>
+                        <div class="tags"></div>
                     </div>
                 </div>
-                <input type="hidden" name="attributes" id="selected-attributes">
+                <input type="hidden" name="tags" id="selected-tags">
                 <input type="hidden" name="course" id="selected-course">
 
                 <div class="ingredients-container">
@@ -288,6 +288,23 @@ function addEditModal()
                     </div>
                 </div>
 
+                <div class="tags flex">
+                    <div class="tags-container">
+                        <p>Tags</p>
+                        <div class="tags"></div>
+                    </div>
+                    <div class="tag-suggestions">
+                        <p>Suggested tags</p>
+                        <div class="suggested-tags"></div>
+                    </div>
+                    <div class="tag-search">
+                        <p>Search tags</p>
+                        <input type="text" class="tag_search" placeholder="Type to add tags...">
+                        <button type="button" id="add-tag">Add Tag</button>
+                        <div class="search-results"></div>
+                    </div>
+                </div>
+
                 <div class="flex align-start">
                     <div class="flex-grow">
                         <div class="flex">
@@ -341,7 +358,6 @@ function addEditModal()
                     </div>
                 </div>
 
-                <input type="hidden" name="attributes" id="selected-attributes">
             </fieldset>
         </form>
     </div>

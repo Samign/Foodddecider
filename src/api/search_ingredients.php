@@ -19,7 +19,7 @@ $stmt = $db->prepare("
 
 $stmt->execute([
     ':prefix' => "$q%",
-    ':term'   => $q,
+    ':term'   => $q
 ]);
 
 echo json_encode($stmt->fetchAll(PDO::FETCH_ASSOC));

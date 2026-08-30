@@ -91,8 +91,8 @@ function findOrCreateTag(PDO $db, string $tagName): int {
         return (int) $existingTagId;
     }
  
-    $stmt = $db->prepare("INSERT INTO tags (name, slug) VALUES (:name, :slug) ON CONFLICT (slug) DO UPDATE SET name = tags.name RETURNING id");
-    $stmt->execute([':name' => $name, ':slug' => $slug]);
+    $stmt = $db->prepare("INSERT INTO tags (name, slug, is_featured, usage_count) VALUES (:name, :slug, :is_featured, :usage_count) ON CONFLICT (slug) DO UPDATE SET name = tags.name RETURNING id");
+    $stmt->execute([':name' => $name, ':slug' => $slug, ':is_featured' => false, ':usage_count' => 1]);
     return (int) $stmt->fetchColumn();
 }
 
@@ -180,10 +180,11 @@ function saveStepSections(PDO $db, int $recipeId, array $stepSections): void {
             ':position'  => $sectionPosition++,
         ]);
         $sectionId = $sectionStmt->fetchColumn();
+        $sectionStmt->closeCursor();
  
         if (!empty($section['steps']) && is_array($section['steps'])) {
             foreach ($section['steps'] as $step) {
-                if (trim($step) === '') continue;
+                if (!is_string($step) || trim($step) === '') continue;
  
                 $stepStmt->execute([
                     ':recipe_id'   => $recipeId,
@@ -228,6 +229,7 @@ function saveIngredientSections(PDO $db, int $recipeId, array $ingredientSection
             ':position'  => $sectionPosition++,
         ]);
         $sectionId = $sectionStmt->fetchColumn();
+        $sectionStmt->closeCursor();
  
         if (!empty($section['ingredients']) && is_array($section['ingredients'])) {
             foreach ($section['ingredients'] as $ingredient) {
