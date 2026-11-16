@@ -18,15 +18,17 @@ function getUser()
 function getNavBar($navButtons = false)
 {
     $user = getUser();
+    $userLoggedIn = isset($_SESSION['user_id']);
+
     ?>
     <nav>
         <a href="/" class="home-button">FoodDecider</a>
 
         <?php if ($navButtons): ?>
             <div class="recipe-category-buttons">
-                <button class="nav-buttons active" id="personal-recipes">My Collection</button>
+                <button class="nav-buttons <?php echo $userLoggedIn ? 'active' : ''; ?>" id="personal-recipes">My Collection</button>
                 <button class="nav-buttons" id="friends-recipes">Following</button>
-                <button class="nav-buttons" id="public-recipes">Discover</button>
+                <button class="nav-buttons <?php echo $userLoggedIn ? '' : 'active'; ?>" id="public-recipes">Discover</button>
             </div>
         <?php endif; ?>
         <!-- Search bar -->
