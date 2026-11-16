@@ -11,7 +11,6 @@ async function search(q) {
         renderRecipeList(recipeList, data.recipes);
         renderProfiles(data.users);
     } catch (err) {
-        console.error('Search failed:', err);
         recipeList.textContent = 'Something went wrong. Please try again.';
     }
 }

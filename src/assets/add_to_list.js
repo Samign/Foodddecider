@@ -25,7 +25,6 @@ async function addOne(button) {
             setTimeout(() => { icon.textContent = 'add'; }, 1200);
         }
     } catch (error) {
-        console.error(error);
         toast.error('Could not add to the shopping list');
     } finally {
         button.disabled = false;
@@ -42,7 +41,6 @@ async function addAll() {
     try {
         lists = await fetchLists();
     } catch (error) {
-        console.error(error);
         toast.error('Could not load your lists');
         return;
     }
@@ -62,7 +60,6 @@ async function addAll() {
         const n = choice.items.length;
         toast.success(`Added ${n} item${n === 1 ? '' : 's'} to ${list.name}`);
     } catch (error) {
-        console.error(error);
         toast.error('Could not add the items');
     }
 }

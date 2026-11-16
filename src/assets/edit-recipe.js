@@ -32,7 +32,6 @@ export async function grabAndDisplayEdit(recipeId) {
     try {
         recipe = await fetchRecipeById(recipeId);
     } catch (err) {
-        console.error(err);
         toast.error('Could not load the recipe, please try again');
         return;
     }

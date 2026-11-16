@@ -2,6 +2,7 @@ import { handleEdit } from './edit-recipe.js';
 import { escapeHtml, getRecipeImage } from './recipe-cards.js';
 import { fetchRecipeById, parseJson, groupBySection } from './recipe-data.js';
 import { toast } from './toast.js';
+import { confirmDialog } from './dialog.js';
 
 let overlay, expandedModal, expanded = false;
 
@@ -349,7 +350,7 @@ export function closeRecipe() {
 }
 
 async function handleDelete(recipeId) {
-    if (!confirm('Are you sure you want to delete this recipe?')) return;
+    if (!await confirmDialog({ title: 'Delete recipe', message: `Delete the recipe and everything on it? This can't be undone.` })) return;
 
     const response = await fetch(`/api/recipes/delete_recipe.php?recipe_id=${recipeId}`);
     const result   = await response.json();

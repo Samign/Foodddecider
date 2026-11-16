@@ -155,7 +155,7 @@ export async function init(targetElement) {
             
                 syncSuggestions();
             } catch (err) {
-                console.error('Failed to load tag suggestions:', err);
+                toast.error('Failed to load tag suggestions');
             }
         }
     }

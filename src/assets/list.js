@@ -110,7 +110,6 @@ function createShoppingList(modal, firstListId) {
             .then(task)
             .then(() => row.classList.remove('save-failed'))
             .catch(error => {
-                console.error(error);
                 row.classList.add('save-failed');
             })
             .finally(() => { savesInFlight--; });
@@ -452,7 +451,6 @@ export async function init(modal) {
                 showOwnerControls();
                 list.switchList(currentId);
             } catch (error) {
-                console.error(error);
                 picker.value = currentId;
                 toast.error('Could not create the list');
             }
@@ -476,7 +474,6 @@ export async function init(modal) {
                 showOwnerControls();
                 list.switchList(currentId);
             } catch (error) {
-                console.error(error);
                 toast.error('Could not delete the list');
             }
         });
@@ -496,7 +493,6 @@ export async function init(modal) {
                 const { groups } = await request(LISTS_API, { query: { list_id: forList } });
                 if (forList === currentId) renderSharePanel(sharePanel, groups);   // ignore it if the user switched list meanwhile
             } catch (error) {
-                console.error(error);
                 sharePanel.textContent = 'Could not load your groups.';
             }
         });
@@ -512,7 +508,6 @@ export async function init(modal) {
                     body: { action: checkbox.checked ? 'share' : 'unshare', list_id: currentId, group_id: checkbox.value }
                 });
             } catch (error) {
-                console.error(error);
                 checkbox.checked = !checkbox.checked;   // put it back
                 toast.error('Could not change sharing');
             }
@@ -521,6 +516,6 @@ export async function init(modal) {
         // Dragging to reorder, e.g. with SortableJS:
         // Sortable.create(modal.querySelector(ROWS), { onEnd: event => list.moved(event.item) });
     } catch (error) {
-        console.error('Could not start the shopping list', error);
+        toast.error('Could not start the shopping list');
     }
 }
