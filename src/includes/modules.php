@@ -223,6 +223,7 @@ function getFilterMenu()
 {
     ?>
     <div class="modal hidden" id="filter-menu">
+        <span class="close-button">&times;</span>
         <form id="filter-form">
             <fieldset>
                 <legend>Filter recipes</legend>
@@ -308,6 +309,7 @@ function getFilterMenu()
                 </div>
                 
                 <input type="submit" value="Apply filters">
+                <button type="reset">Clear Filters</button>
             </fieldset>
         </form>
     </div>

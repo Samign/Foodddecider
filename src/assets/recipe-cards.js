@@ -17,11 +17,7 @@ export function getRecipeHtml(recipe) {
 
     return `
         <div class="recipe-card" data-id="${recipe.id}">
-            <a href="/user/${encodeURIComponent(recipe.owner_username)}">
-                <img class="owner-image"
-                     src="/uploads/profile_pictures/${escapeHtml(ownerImg)}"
-                     alt="Owner Image">
-            </a>
+            <img class="owner-image" src="/uploads/profile_pictures/${escapeHtml(ownerImg)}" alt="Owner Image">
             <div class="recipe-image-container">${getRecipeImage(recipe)}</div>
             <div class="recipe-content">
                 <h3>${escapeHtml(recipe.title)}</h3>

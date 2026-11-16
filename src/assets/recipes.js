@@ -10,6 +10,8 @@ let activeCategory = null;
 let activeSubCategory = null;
 let sortSelect = null;
 let loadToken = 0;
+const selectedCourses = new Set();
+let courseContainer = null;
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
 
@@ -92,6 +94,8 @@ function initRangeFilter(root) {
 // ── Event listeners ───────────────────────────────────────────────────────────
 
 function initEventListeners() {
+
+    courseContainer = document.querySelector('#filter-menu .course-types-container');
 
     sortSelect = document.getElementById('sort-select');
     sortSelect?.addEventListener('change', loadRecipes);
@@ -224,6 +228,14 @@ function initEventListeners() {
 
     const rangeSyncs = [...document.querySelectorAll('.range-filter')].map(initRangeFilter);
 
+    courseContainer?.addEventListener('click', e => {
+        const chip = e.target.closest('[data-id]');
+        if (!chip) return;
+        const id = chip.dataset.id;
+        selectedCourses.has(id) ? selectedCourses.delete(id) : selectedCourses.add(id);
+        renderCourseSelection();
+    });
+
     // document.addEventListener('click', (e) => {
     //     const saveButton = e.target.closest('.saves');
     //     const card       = e.target.closest('.recipe-card');
@@ -250,6 +262,16 @@ function initEventListeners() {
     //         window.history.back();
     //     }
     // });
+}
+
+function renderCourseSelection() {
+    document.getElementById('selected-course').value = [...selectedCourses].join(',');
+    courseContainer?.querySelectorAll('[data-id]').forEach(el => {
+        const on = selectedCourses.has(el.dataset.id);
+        el.classList.toggle('selected', on);
+        el.setAttribute('aria-pressed', String(on));
+    });
+    console.log("Selected courses:", [...selectedCourses]);
 }
 
 // ── Data loading ──────────────────────────────────────────────────────────────

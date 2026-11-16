@@ -58,7 +58,7 @@ if ($loggedIn) {
 
     <div class="user-profile">
         <?php if ($user['image_base']): ?>
-                <img class="user-profile-img" src="/uploads/profile_pictures/<?php echo htmlspecialchars($user['image_base']); ?>_200.webp" alt="profile picture"></img>
+                <img class="user-profile-img" src="/uploads/profile_pictures/<?php echo htmlspecialchars($user['image_base']); ?>.webp" alt="profile picture"></img>
             <?php else: ?>
                 <img class="user-profile-img" src="/uploads/profile_pictures/<?php echo htmlspecialchars($user['username']); ?>_avatar.svg" alt="profile picture"></img>
             <?php endif; ?>
