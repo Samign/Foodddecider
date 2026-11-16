@@ -1,6 +1,7 @@
 <?php
 
 require_once __DIR__ . '/session.php';
+require_once __DIR__ . '/user_fetcher.php';
 
 
 function getUser()
@@ -29,14 +30,20 @@ function getNavBar($navButtons = false)
             </div>
         <?php endif; ?>
         <!-- Search bar -->
-        <form action="/search.html" method="GET" class="search-bar">
+        <form action="/results" method="GET" class="search-bar">
             <span class="material-symbols-outlined">search</span>
-            <input class="search" type="text" name="search" placeholder="Search recipes or profiles...">
+            <input class="search" type="text" name="q" placeholder="Search recipes or profiles...">
             <button type="submit" class="search-button">Search</button>
         </form>
-        <div class="current-user">
-
-            <?php if ($user): ?>
+        <?php if ($user): ?>
+            <div class="shopping-list-button">
+                <span class="material-symbols-outlined">receipt_long</span>
+            </div>
+            <div class="social-tab">
+                <span class="badge">0</span>
+                <span class="material-symbols-outlined">family_group</span>
+            </div>
+            <div class="current-user">
                 <?php if ($user['image_base']): ?>
                     <img src="/uploads/profile_pictures/<?php echo htmlspecialchars($user['image_base']); ?>.webp"
                         alt="Profile Picture" class="profile-picture">
@@ -49,23 +56,90 @@ function getNavBar($navButtons = false)
             <?php endif; ?>
         </div>
     </nav>
+
+    <div class="modal hidden" id="social-modal">
+        <div>
+            <span class="close-button">&times;</span>
+            <h2>Groups</h2>
+            <div class="social-content" id="social-content">
+                <div class="group-invitations" id="group-invitations"></div>
+                <div class="group-list" id="group-list"></div>
+                <button class="create-group">Create new group</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal hidden" id="create-group-modal">
+        <div>
+            <span class="close-button">&times;</span>
+            <h2 id="create-group-add-edit-title">Create Group</h2>
+            <form id="create-group-form">
+                <label for="group_name">Group Name</label>
+                <input type="text" name="group_name" id="group_name" required>
+
+                <h3>Suggested members</h3>
+                <div id="suggested-members" class="suggested-members"></div>
+
+                <h3>Members</h3>
+                <div class="users-container"></div>
+                <button type="button" id="add-member-btn">+ Add another user</button>
+
+                <button type="submit" id="create-group-submit">Create Group</button>
+            </form>
+        </div>
+    </div>
+
+    <div class="modal hidden" id="shopping-list-modal">
+        <div>
+            <span class="close-button" aria-label="Close">&times;</span>
+            <h2>Shopping List</h2>
+            <button type="button" id="share-list-button" hidden>Share with group</button>
+            <div class="share-panel" hidden></div>
+            <select name="lists" id="lists" aria-label="Shopping list"></select>
+            <button type="button" class="delete-list-button" hidden>Delete list</button>
+
+            <div class="shopping-list-content" id="shopping-list-content">
+                <form id="shopping-list-form">
+
+                    <div class="shopping-rows"></div>
+
+                    <details class="shopping-archive" hidden>
+                        <summary>Archive (<span class="archive-count">0</span>), items are removed after 2 days</summary>
+                        <div class="shopping-archive-rows"></div>
+                    </details>
+
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal hidden" id="invitation-modal">
+        <div>
+            <span class="close-button">&times;</span>
+            <h2>Pending Invitations</h2>
+            <div class="invitation-list" id="invitation-list">
+            </div>
+        </div>
+    </div>
     <?php
 }
 
 function getExpandedModal()
 {
-    $user = getUser();
     ?>
 
     <div class="modal flex hidden" id="expanded-modal">
         <div class="modal-content">
             <div class="left-side-expanded">
                 <div class="expanded-recipe-image"></div>
-                <div class="recipe-attribues"></div>
+                <div class="recipe-tags"></div>
                 <div class="views"></div>
                 <div class="ingredients">
                     <div class="flex">
                         <h4>THE INGREDIENTS</h4>
+                        <button class="add-all-button">
+                            <span class="material-symbols-outlined">add_shopping_cart</span> Add all
+                        </button>
                     </div>
                     <div class="ingredient-list"></div>
                 </div>
@@ -91,21 +165,22 @@ function getExpandedModal()
             </div>
         </div>
     </div>
+    
     <?php
-}
-
-function getUserProfileModal()
-{
-    $user = getUser();
-    if (!$user)
-        return;
+        $user = getUser();
+        if (!$user) return;
     ?>
+
     <div class="modal hidden" id="profile-modal">
         <div class="user-info"><?php echo htmlspecialchars($user['username']); ?></div>
         <div class="flex">
             <a href="/user/<?php echo htmlspecialchars($user['username']); ?>">View profile</a>
             <a href="/auth/logout.php"> <span class="material-symbols-outlined">logout</span> Log out</a>
         </div>
+        <button type="button" id="theme-toggle">
+            <span class="material-symbols-outlined">dark_mode</span>
+            <span class="theme-label">Dark mode</span>
+        </button>
     </div>
     <?php
 }
@@ -156,15 +231,35 @@ function getFilterMenu()
                     <div class="tags-container">
                         <p>Tags</p>
                         <div class="tags"></div>
+                        <div class="tag-input-row">
+                            <input type="text" id="custom-tag-input" maxlength="30" placeholder="Add your own tag" autocomplete="off">
+                            <button type="button" id="add-tag-button">Add</button>
+                            <div id="tag-suggestions" class="autocomplete-list"></div>
+                        </div>
+                        <div id="selected-tags-list" class="selected-tags-list"></div>
                     </div>
+                    <input type="hidden" name="tags" id="selected-tags" value="[]">
                 </div>
-                <input type="hidden" name="tags" id="selected-tags">
+                <!-- <input type="hidden" name="tags" id="selected-tags"> -->
                 <input type="hidden" name="course" id="selected-course">
 
-                <div class="ingredients-container">
-                    <label for="ingredients">Ingredients</label>
-                    <div class="ingredient-item"><span>•</span><input class="ingredient-text" name="ingredients[]"
-                            placeholder="Enter an ingredient"></div>
+                <div class="ingredients-container" data-plain-ingredients>
+                    <p>Ingredients</p>
+                    <div id="ingredient-list">
+                        <div class="ingredient-item">
+                            <span>•</span>
+                            <input class="ingredient-text" name="ingredients[]" placeholder="Enter an ingredient" autocomplete="off">
+                            <button type="button" class="remove-ingredient" aria-label="Remove ingredient">×</button>
+                            <div class="autocomplete-list"></div>
+                        </div>
+                    </div>
+                    <button type="button" id="add-ingredient">+ Add ingredient</button>
+                    <label>Recipe must contain
+                        <select name="ingredients_match">
+                            <option value="all">all of them</option>
+                            <option value="any">any of them</option>
+                        </select>
+                    </label>
                 </div>
 
                 <div class="time-filter-container flex">
@@ -177,7 +272,39 @@ function getFilterMenu()
                         <input type="checkbox" name="include_cook_time" id="include_cook_time">
                     </div>
                 </div>
-
+                
+                <div class="range-filter">
+                    <div class="range-header">
+                        <span>Calories <small>per serving</small></span>
+                        <div class="range-numbers">
+                            <input type="number" class="num-min" name="min_kcal" min="0" step="1" placeholder="0" aria-label="Minimum calories">
+                            <span>–</span>
+                            <input type="number" class="num-max" name="max_kcal" min="0" step="1" placeholder="1500+" aria-label="Maximum calories">
+                            <span>kcal</span>
+                        </div>
+                    </div>
+                    <div class="range-slider">
+                        <input type="range" class="range-min" min="0" max="1500" step="10" value="0" aria-label="Minimum calories slider">
+                        <input type="range" class="range-max" min="0" max="1500" step="10" value="1500" aria-label="Maximum calories slider">
+                    </div>
+                </div>
+                            
+                <div class="range-filter">
+                    <div class="range-header">
+                        <span>Protein <small>per serving</small></span>
+                        <div class="range-numbers">
+                            <input type="number" class="num-min" name="min_protein" min="0" step="1" placeholder="0" aria-label="Minimum protein">
+                            <span>–</span>
+                            <input type="number" class="num-max" name="max_protein" min="0" step="1" placeholder="100+" aria-label="Maximum protein">
+                            <span>g</span>
+                        </div>
+                    </div>
+                    <div class="range-slider">
+                        <input type="range" class="range-min" min="0" max="100" step="1" value="0" aria-label="Minimum protein slider">
+                        <input type="range" class="range-max" min="0" max="100" step="1" value="100" aria-label="Maximum protein slider">
+                    </div>
+                </div>
+                
                 <input type="submit" value="Apply filters">
             </fieldset>
         </form>
@@ -222,7 +349,7 @@ function addEditModal()
 
                     <div class="save-button">
                         <span class="material-symbols-outlined">publish</span>
-                        <input type="submit" value="Save Recipe" class="save-recipe-button">
+                        <button type="submit" value="Save Recipe" class="save-recipe-button">Save Recipe</button>
                     </div>
                 </div>
                 <div class="flex">
@@ -298,7 +425,7 @@ function addEditModal()
                         <div class="suggested-tags"></div>
                     </div>
                     <div class="tag-search">
-                        <p>Search tags</p>
+                        <p>New tags</p>
                         <input type="text" class="tag_search" placeholder="Type to add tags...">
                         <button type="button" id="add-tag">Add Tag</button>
                         <div class="search-results"></div>

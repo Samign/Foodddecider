@@ -36,7 +36,6 @@ if ($loggedIn) {
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com/" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Epilogue:ital,wght@0,100..900;1,100..900&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&icon_names=add,add_a_photo,bookmark,check_circle,chef_hat,circle,close,cooking,filter_list,group,link,logout,open_in_new,publish,search,shuffle,sort,timer,visibility" />
     <link rel="stylesheet" href="/assets/style.css">
 
     <!-- Migth implement crawler friendly properties -->
@@ -47,7 +46,6 @@ if ($loggedIn) {
     <div class="modal-overlay hidden" id="modal-overlay"></div>
     <?php echo getNavBar(); ?>
     <?php echo getExpandedModal(); ?>
-    <?php echo getUserProfileModal(); ?>
     <?php echo getFilterMenu(); ?>
 
     <div class="modal hidden" id="follower-modal">
@@ -82,20 +80,17 @@ if ($loggedIn) {
             </div>
         </div>
 
-        <?php echo getFilterMenu(); ?>
+        <?php 
+        echo getFilterMenu(); 
+        echo getExpandedModal();    
+        ?>
 
     </div>
     <?php if(!$loggedIn) {
         echo getLoginModal();
     }; ?>
 
-
-
-    <?php if(!$loggedIn): ?> 
-        <script type="module" src="/assets/landing-page.js"></script> 
-    <?php endif; ?>
-    <script type="module" src="/assets/meta-data-loader.js"></script>
+    <script type="module" src="/assets/main.js"></script>
     <script type="module" src="/assets/users.js"></script>
-    <script type="module" src="/assets/recipes.js"></script>
 </body>
 </html>

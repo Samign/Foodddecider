@@ -1,6 +1,6 @@
 <?php
-require '../includes/db.php';
-require '../includes/session.php';
+require __DIR__ . '/../includes/db.php';
+require __DIR__ . '/../includes/session.php';
 
 header('Content-type: application/json');
 

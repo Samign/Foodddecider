@@ -1,49 +1,22 @@
 <?php
 require_once __DIR__ . '/session.php';
 require_once __DIR__ . '/db.php';
+require_once __DIR__ . '/user_fetcher.php';
+require_once __DIR__ . '/helpers/recipe_helper.php';
 
-function getRecipeById(
-    $id = null, 
-    $ingredients_filter = [], 
-    $attributes_filter = [], 
-    $action = null, 
-    $course_type = null, 
-    $time = null, 
-    $include_cook_time = null, 
-    $public = '0', 
-    $sort_mode = null, 
-    $category = null, 
-    $order_by = null, 
-    $search_query = null,
-    $limit = 20,
-    $offset = 0,
-    $owner = null,
-    ) {
+function pgArrayLiteral(array $values): string {
+    $escaped = array_map(
+        fn($v) => '"' . str_replace(['\\', '"'], ['\\\\', '\\"'], (string)$v) . '"',
+        $values
+    );
+    return '{' . implode(',', $escaped) . '}';
+}
 
-    if (!$owner) {
-        $owner = $_SESSION['user_id'] ?? null;
-    }
+function getRecipe($id): ?array {
     $db = db();
-    
-
-    // -- attributes
-    // LEFT JOIN LATERAL (
-    //     SELECT json_agg(
-    //         json_build_object(
-    //             'id', a.id,
-    //             'name', a.name
-    //         )
-    //         ORDER BY a.name
-    //     ) AS attributes
-    //     FROM recipe_attributes ra
-    //     JOIN attributes a ON ra.attribute_id = a.id
-    //     WHERE ra.recipe_id = r.id
-    // ) attr ON true
-
-    // COALESCE(attr.attributes, '[]'::json) AS attributes, 
-
+ 
     $sql = "
-        SELECT 
+        SELECT
             r.id,
             r.owner_id,
             r.title,
@@ -56,45 +29,43 @@ function getRecipeById(
             r.created_at,
             r.image_base,
             r.servings,
-        
+ 
             COALESCE(saves.saves, 0) AS saves,
-            COALESCE(user_saved.is_saved, false) AS is_saved,
-            (:user = r.owner_id) AS is_owner,
+            EXISTS (
+                SELECT 1 FROM saved_recipes s
+                WHERE s.recipe_id = r.id AND s.user_id = :user
+            ) AS is_saved,
+            COALESCE(r.owner_id = :user, false) AS is_owner,
             u.username AS owner_username,
             u.image_base AS owner_image,
-        
+ 
             COALESCE(steps.recipe_steps, '[]'::json) AS recipe_steps,
             COALESCE(ingredients.recipe_ingredients, '[]'::json) AS recipe_ingredients,
             COALESCE(macros.ingredient_macros, '[]'::json) AS ingredient_macros,
-
-            CASE 
-                WHEN COALESCE(:search_query, '') <> ''
-                THEN ts_rank(r.search_vector, plainto_tsquery('english', :search_query))
-                ELSE 0
-            END AS rank
-
+            COALESCE(step_sec.sections, '[]'::json) AS recipe_step_sections,
+            COALESCE(ing_sec.sections, '[]'::json) AS recipe_ingredient_sections,
+            COALESCE(tags.recipe_tags, '[]'::json) AS recipe_tags
+ 
         FROM recipes r
-        
-        LEFT JOIN users u 
+ 
+        LEFT JOIN users u
             ON r.owner_id = u.id
-        
-        LEFT JOIN saved_recipes sr 
-            ON r.id = sr.recipe_id
-        
+ 
         -- steps
         LEFT JOIN LATERAL (
             SELECT json_agg(
                 json_build_object(
                     'id', rs.id,
                     'step_number', rs.step_number,
-                    'content', rs.content
+                    'content', rs.content,
+                    'section_id', rs.section_id
                 )
                 ORDER BY rs.step_number
             ) AS recipe_steps
             FROM recipe_steps rs
             WHERE rs.recipe_id = r.id
         ) steps ON true
-        
+ 
         -- ingredients
         LEFT JOIN LATERAL (
             SELECT json_agg(
@@ -102,14 +73,35 @@ function getRecipeById(
                     'id', ri.id,
                     'name', ri.ingredient_name,
                     'amount', ri.amount,
-                    'unit', ri.unit
+                    'unit', ri.unit,
+                    'section_id', ri.section_id
                 )
                 ORDER BY ri.id
             ) AS recipe_ingredients
             FROM recipe_ingredients ri
             WHERE ri.recipe_id = r.id
-        ) ingredients ON true 
+        ) ingredients ON true
 
+        -- step sections
+        LEFT JOIN LATERAL (
+            SELECT json_agg(
+                json_build_object('id', ss.id, 'name', ss.title)
+                ORDER BY ss.position
+            ) AS sections
+            FROM step_sections ss
+            WHERE ss.recipe_id = r.id
+        ) step_sec ON true
+
+        -- ingredient sections
+        LEFT JOIN LATERAL (
+            SELECT json_agg(
+                json_build_object('id', isec.id, 'name', isec.title)
+                ORDER BY isec.position
+            ) AS sections
+            FROM ingredient_sections isec
+            WHERE isec.recipe_id = r.id
+        ) ing_sec ON true
+ 
         -- macros
         LEFT JOIN LATERAL (
             SELECT json_agg(
@@ -125,188 +117,366 @@ function getRecipeById(
                     'grams_per_ml', iu.grams_per_ml,
                     'grams_per_piece', iu.grams_per_piece
                 )
+                ORDER BY ri.id
             ) AS ingredient_macros
             FROM recipe_ingredients ri
             LEFT JOIN ingredients i ON ri.ingredient_id = i.id
             LEFT JOIN ingredient_densities iu ON ri.ingredient_id = iu.id
             WHERE ri.recipe_id = r.id
         ) macros ON true
-
-        -- saves
+ 
+        -- saves count
         LEFT JOIN LATERAL (
-            SELECT COUNT(DISTINCT sr.user_id) AS saves
-            FROM saved_recipes sr
-            WHERE sr.recipe_id = r.id
+            SELECT COUNT(DISTINCT s.user_id) AS saves
+            FROM saved_recipes s
+            WHERE s.recipe_id = r.id
         ) saves ON true
-        
+
+        -- tags
         LEFT JOIN LATERAL (
-            SELECT EXISTS(
-            SELECT 1 FROM saved_recipes sr
-            WHERE sr.recipe_id = r.id AND sr.user_id = :user
-            ) AS is_saved
-        ) user_saved ON true
-
-        WHERE 1=1 
+            SELECT json_agg(
+                json_build_object(
+                    'id', t.id,
+                    'name', t.name,
+                    'slug', t.slug
+                )
+                ORDER BY t.name
+            ) AS recipe_tags
+            FROM recipe_tags rt
+            JOIN tags t ON t.id = rt.tag_id
+            WHERE rt.recipe_id = r.id
+        ) tags ON true
+ 
+        WHERE r.id = :id
+          AND (r.is_public = '1' OR r.owner_id = :user)
     ";
-    
-    // Public or not
-    if ($public == '1') {
-        $sql .= " AND r.is_public = '1' ";
-    }
+ 
+    $stmt = $db->prepare($sql);
+    $stmt->bindValue(':id', (int)$id, PDO::PARAM_INT);
+    $stmt->bindValue(':user', $_SESSION['user_id'] ?? null);
+    $stmt->execute();
+ 
+    return $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+}
 
-    if ($category == 'favorites') {
-        $sql .= " AND EXISTS (SELECT 1 FROM recipe_views rv WHERE rv.recipe_id = r.id AND rv.user_id = :owner_id) ";
-    } elseif ($category == 'saved') {
-        $sql .= " AND sr.user_id = :owner_id ";
+function getRecipeCards(array $opts = []): array {
+    $opts += [
+        'ingredients_filter' => [],
+        'tags_filter'        => [],
+        'action'             => null,   // 'random' => one random recipe
+        'course_types'      => [],
+        'ingredients_match' => 'all',
+        'time'               => null,
+        'include_cook_time'  => null,
+        'public'             => '0',
+        'category'           => null,   // favorites | saved | following
+        'order_by'           => null,
+        'search_query'       => null,
+        'limit'              => 20,
+        'offset'             => 0,
+        'owner'              => null,   // whose recipes to list (defaults to current user)
+        'username'           => null,
+        'min_kcal'           => null,
+        'max_kcal'           => null,
+        'min_protein'        => null,
+        'max_protein'        => null
+    ];
+ 
+    $db       = db();
+    $viewer   = $_SESSION['user_id'] ?? null;
+    $owner    = $opts['owner'] ?? $viewer;
+    $public   = ((string)$opts['public'] === '1');
+    $category = $opts['category'];
+    $search   = trim((string)($opts['search_query'] ?? ''));
+
+    $ownerExplicit = false;
+
+    $username = $opts['username'] ?? null;
+    if ($username) {
+        $ownerInfo = grabUserInfo(null, $username);
+        if ($ownerInfo) {
+            $owner = $ownerInfo['id'];
+            $ownerExplicit = true;
+        } else {
+            return []; // User not found, return empty array
+        }
+    }
+ 
+    // Looking at someone else's recipes: they only ever get the public ones.
+    if ($owner !== null && (string)$owner !== (string)$viewer) {
+        if ($category !== null) {
+            return [];
+        }
+        $public = true;
+    }
+ 
+    // These views are scoped to a user, and there isn't one.
+    if ($owner === null && ($category !== null || !$public)) {
+        return [];
+    }
+ 
+    $where  = [];
+    $params = [':user' => $viewer];
+ 
+    // Visibility / category
+    if ($public) {
+        $where[] = "r.is_public = '1'";
+    }
+ 
+    if ($category === 'favorites') {
+        $where[] = "EXISTS (SELECT 1 FROM recipe_views rv WHERE rv.recipe_id = r.id AND rv.user_id = :owner_id)";
+    } elseif ($category === 'saved') {
+        $where[] = "EXISTS (SELECT 1 FROM saved_recipes sv WHERE sv.recipe_id = r.id AND sv.user_id = :owner_id)";
     } elseif ($category === 'following') {
-        $sql .= " AND r.owner_id IN (SELECT followed_id FROM followers WHERE follower_id = :owner_id) ";
-    } elseif ($public !== '1' && !$id) {
-        $sql .= " AND (r.owner_id = :owner_id) ";
+        $where[] = "r.owner_id IN (SELECT followed_id FROM followers WHERE follower_id = :owner_id)";
+    } elseif (!$public || $ownerExplicit) {
+        $where[] = "r.owner_id = :owner_id";
     }
-
-    // Search query
-    if ($search_query) {
-        $sql .= "
-        AND (
+ 
+    // Category lists can include other people's recipes: never show private ones.
+    if ($category !== null && !$public) {
+        $where[] = "(r.is_public = '1' OR r.owner_id = :user)";
+    }
+ 
+    // Search
+    $rankSql = "0";
+    if ($search !== '') {
+        $where[] = "(
             r.search_vector @@ plainto_tsquery('english', :search_query)
             OR r.title % :search_query
             OR r.description % :search_query
             OR EXISTS (
                 SELECT 1 FROM recipe_ingredients ri
                 WHERE ri.recipe_id = r.id AND ri.ingredient_name % :search_query
-            )";
+            )
+        )";
+        $rankSql = "GREATEST(ts_rank(r.search_vector, plainto_tsquery('english', :search_query)), similarity(r.title, :search_query), similarity(r.description, :search_query))";
+        $params[':search_query'] = $search;
     }
-
-    // Recipe ID
-    if ($id) {
-        $sql .= " AND r.id = :initial_recipe_id ";
-    }
-
-    // Ingredients
-    if (!empty($ingredients_filter)) {
-        $sql .= " AND r.id IN (
-            SELECT ri.recipe_id FROM recipe_ingredients ri
-            WHERE LOWER(ri.ingredient_name) = ANY(:ingredients)
-            GROUP BY ri.recipe_id
-            HAVING COUNT(DISTINCT ri.ingredient_name) >= 1
-        ) ";
-    }
-
-    // Macro nutrients - join with ingredients table to filter by available nutrition data
-    if (!empty($ingredients_filter)) {
-        $sql .= " AND EXISTS (
-            SELECT 1 FROM recipe_ingredients ri
-            JOIN ingredients i ON ri.ingredient_id = i.id
-            WHERE ri.recipe_id = r.id
-            AND i.energy_kcal IS NOT NULL
-        ) ";
-    }
-
-    // Attributes
-    // if (!empty($attributes_filter)) {
-    //     $sql .= " AND r.id IN (
-    //         SELECT recipe_id FROM recipe_attributes
-    //         WHERE attribute_id = ANY(:attributes)
-    //         HAVING COUNT(DISTINCT attribute_id) >= 1
-    //     ) ";
-    // }
-
+ 
     // Course type
-    if ($course_type) {
-        $sql .= " AND r.course_type = :course_type ";
+    $courseIds = array_values(array_unique(array_filter(array_map('intval', (array)$opts['course_types']))));
+    if ($courseIds) {
+        $where[] = "r.course_types = ANY(CAST(:course_ids AS int[]))";
+        $params[':course_ids'] = '{' . implode(',', $courseIds) . '}';
+    }
+ 
+    // Time
+    if ($opts['time'] !== null && $opts['time'] !== '') {
+        $col = $opts['include_cook_time'] ? 'r.total_time_minutes' : 'r.prep_time_minutes';
+        $where[] = "$col <= :recipe_time";
+        $params[':recipe_time'] = (int)$opts['time'];
+    }
+ 
+    // Ingredients
+    // Ingredients: partial, case-insensitive match; all or any
+    $ingredients = [];
+    foreach ((array)$opts['ingredients_filter'] as $ing) {
+        $ing = trim((string)$ing);
+        if ($ing !== '') $ingredients[mb_strtolower($ing)] = true;
+    }
+    $ingredients = array_slice(array_map('strval', array_keys($ingredients)), 0, 10);
+
+    if ($ingredients) {
+        $parts = [];
+        foreach ($ingredients as $i => $ing) {
+            $parts[] = "EXISTS (
+                SELECT 1 FROM recipe_ingredients ri
+                WHERE ri.recipe_id = r.id
+                  AND ri.ingredient_name ILIKE '%' || :ing_$i || '%'
+            )";
+            $params[":ing_$i"] = addcslashes($ing, '%_\\');   // user input is literal, not a wildcard
+        }
+        $where[] = '(' . implode($opts['ingredients_match'] === 'any' ? ' OR ' : ' AND ', $parts) . ')';
     }
 
-    // Time filter
-    if ($time !== null && $time !== '') {
-        if ($include_cook_time) {
-            $sql .= " AND r.total_time_minutes = :recipe_time ";
-        } else {
-            $sql .= " AND r.prep_time_minutes  = :recipe_time ";
+    // Tags: matched by slug, recipe must have every selected tag
+    $tagSlugs = [];
+    foreach ((array)$opts['tags_filter'] as $t) {
+        $slug = slugify((string)$t);
+        if ($slug !== '') $tagSlugs[$slug] = true;
+    }
+    $tagSlugs = array_keys($tagSlugs);
+
+    if ($tagSlugs) {
+        $where[] = "r.id IN (
+            SELECT rt.recipe_id
+            FROM recipe_tags rt
+            JOIN tags t ON t.id = rt.tag_id
+            WHERE t.slug = ANY(:tag_slugs)
+            GROUP BY rt.recipe_id
+            HAVING COUNT(DISTINCT t.slug) = :tag_count
+        )";
+        $params[':tag_slugs'] = pgArrayLiteral($tagSlugs);
+        $params[':tag_count'] = count($tagSlugs);
+    }
+
+    // Macro ranges (per serving)
+    $usesMacroFilter = false;
+    $macroRanges = [
+        'min_kcal'    => ['macros.kcal',    '>='],
+        'max_kcal'    => ['macros.kcal',    '<='],
+        'min_protein' => ['macros.protein', '>='],
+        'max_protein' => ['macros.protein', '<='],
+    ];
+    
+    foreach ([['min_kcal', 'max_kcal'], ['min_protein', 'max_protein']] as [$lo, $hi]) {
+        if (is_numeric($opts[$lo] ?? null) && is_numeric($opts[$hi] ?? null)
+            && (float)$opts[$lo] > (float)$opts[$hi]) {
+            [$opts[$lo], $opts[$hi]] = [$opts[$hi], $opts[$lo]];
         }
     }
 
+    foreach ($macroRanges as $key => [$col, $op]) {
+        $v = $opts[$key] ?? null;
+        if ($v === null || $v === '' || !is_numeric($v)) continue;
+        $where[] = "$col $op CAST(:$key AS numeric)";
+        $params[":$key"] = (string)max(0, min((float)$v, 100000));
+        $usesMacroFilter = true;
+    }
+ 
+    // Sorting (whitelist)
+    $orderBy = (string)($opts['order_by'] ?? '');
+    if ($orderBy === 'most_viewed_by_user') $orderBy = 'go_to';      // legacy alias remove
+    if ($orderBy === 'go_to' && $viewer === null) $orderBy = '';     // nothing to personalise
 
-    // Grouping
-    // $sql .= " GROUP BY r.id, u.username";
+    // Sorting (whitelist)
+    $orderMap = [
+        'title_asc'     => 'r.title ASC',
+        'title_desc'    => 'r.title DESC',
+        'prep_time'     => 'r.prep_time_minutes ASC NULLS LAST',
+        'total_time'    => 'r.total_time_minutes ASC NULLS LAST',
+        'popular'       => 'saves DESC, r.view_count DESC',
+        'views'         => 'r.view_count DESC',
+        'go_to'         => 'mv.my_views DESC, mv.last_viewed DESC NULLS LAST',
+        'calories_asc'  => 'macros.kcal ASC NULLS LAST',
+        'calories_desc' => 'macros.kcal DESC NULLS LAST',
+        'protein_desc'  => 'macros.protein DESC NULLS LAST',
+        'protein_asc'   => 'macros.protein ASC NULLS LAST',
+        'newest'        => 'r.created_at DESC',
+        'oldest'        => 'r.created_at ASC',
+    ];
 
-    // Sorting
-    // Optimisation if database becomes huge is to use TABLESAMPLE SYSTEM (1) (this grabs 1% of rows randomly)
-    if ($action == 'random') {
-        $sql .= " ORDER BY RANDOM() LIMIT 1";
+    $isRandom = ($opts['action'] === 'random');
+    $orderSql = $isRandom
+        ? 'RANDOM()'
+        : ($orderMap[$orderBy] ?? 'search_rank DESC, r.title ASC') . ', r.id';
+    
+    // Optional joins: only pay for them when the sort needs them
+    $joins       = '';
+    $macroSelect = '';
+
+    if ($orderBy === 'go_to') {
+        $joins .= "
+        LEFT JOIN LATERAL (
+            SELECT COUNT(*) AS my_views, MAX(rv.viewed_at) AS last_viewed
+            FROM recipe_views rv
+            WHERE rv.recipe_id = r.id AND rv.user_id = :user
+        ) mv ON true";
+    }
+
+    $needMacros = str_starts_with($orderBy, 'calories')
+               || str_starts_with($orderBy, 'protein')
+               || $usesMacroFilter
+               || !empty($opts['with_macros']);
+
+    if ($needMacros) {
+        $macroSelect = "ROUND(macros.kcal) AS kcal_per_serving,
+            ROUND(macros.protein, 1) AS protein_per_serving,";
+        $joins .= "
+        LEFT JOIN LATERAL (
+            SELECT
+                SUM(g.grams * i.energy_kcal / 100.0)::numeric
+                    / GREATEST(COALESCE(r.servings, 1), 1) AS kcal,
+                SUM(g.grams * i.protein_g / 100.0)::numeric
+                    / GREATEST(COALESCE(r.servings, 1), 1) AS protein
+            FROM recipe_ingredients ri
+            JOIN ingredients i ON i.id = ri.ingredient_id
+            LEFT JOIN ingredient_densities iu ON iu.id = ri.ingredient_id
+            CROSS JOIN LATERAL (
+                SELECT ri.amount * CASE LOWER(ri.unit)
+                    WHEN 'g'    THEN 1
+                    WHEN 'kg'   THEN 1000
+                    WHEN 'oz'   THEN 28.35
+                    WHEN 'lb'   THEN 453.6
+                    WHEN 'ml'   THEN COALESCE(iu.grams_per_ml, 1)
+                    WHEN 'l'    THEN 1000 * COALESCE(iu.grams_per_ml, 1)
+                    WHEN 'tsp'  THEN 5   * COALESCE(iu.grams_per_ml, 1)
+                    WHEN 'tbsp' THEN 15  * COALESCE(iu.grams_per_ml, 1)
+                    WHEN 'cup'  THEN 240 * COALESCE(iu.grams_per_ml, 1)
+                    ELSE iu.grams_per_piece      -- pieces / no unit
+                END AS grams
+            ) g
+            WHERE ri.recipe_id = r.id
+        ) macros ON true";
+    }
+
+    $sql = "
+        SELECT
+            r.id,
+            r.owner_id,
+            r.title,
+            r.description,
+            r.prep_time_minutes,
+            r.total_time_minutes,
+            r.course_types,
+            r.view_count,
+            r.image_base,
+
+            (SELECT COUNT(DISTINCT s.user_id) FROM saved_recipes s WHERE s.recipe_id = r.id) AS saves,
+            EXISTS (
+                SELECT 1 FROM saved_recipes s
+                WHERE s.recipe_id = r.id AND s.user_id = :user
+            ) AS is_saved,
+            COALESCE(r.owner_id = :user, false) AS is_owner,
+            u.username AS owner_username,
+            u.image_base AS owner_image,
+            COALESCE(tags.recipe_tags, '[]'::json) AS recipe_tags,
+            $macroSelect
+            $rankSql AS search_rank
+
+        FROM recipes r
+        LEFT JOIN users u ON u.id = r.owner_id
+        LEFT JOIN LATERAL (
+            SELECT json_agg(
+                json_build_object('id', t.id, 'name', t.name, 'slug', t.slug)
+                ORDER BY t.name
+            ) AS recipe_tags
+            FROM recipe_tags rt
+            JOIN tags t ON t.id = rt.tag_id
+            WHERE rt.recipe_id = r.id
+        ) tags ON true
+        $joins
+        WHERE " . ($where ? implode(' AND ', $where) : 'TRUE') . "
+        ORDER BY $orderSql
+    ";
+
+ 
+    if ($isRandom) {
+        $sql .= " LIMIT 1";
     } else {
-
-        // Order functioanlity
-            if ($order_by == 'prep_time') {
-                $sql .= " ORDER BY r.prep_time_minutes";
-            } elseif ($order_by == 'total_time') {
-                $sql .= " ORDER BY r.total_time_minutes";
-            } elseif ($order_by == 'popularity') {
-                $sql .= " ORDER BY saves DESC";
-            } elseif ($order_by == 'creation_date_desc') {
-                $sql .= " ORDER BY r.created_at DESC";
-            } elseif ($order_by == 'creation_date_asc') {
-                $sql .= " ORDER BY r.created_at ASC";
-            } elseif ($order_by == 'title_desc') {
-                $sql .= " ORDER BY r.title DESC";
-            } elseif ($order_by == 'title_asc') {
-                $sql .= " ORDER BY r.title ASC";
-            } elseif ($order_by == 'views') {
-                $sql .= " ORDER BY r.view_count DESC";
-            } elseif ($order_by === 'most_viewed_by_user') {
-                $sql .= " ORDER BY (SELECT COUNT(*) FROM recipe_views rv WHERE rv.recipe_id = r.id AND rv.user_id = :owner_id) DESC";
-            } else {
-                $sql .= " ORDER BY rank DESC, r.title ASC";
-            }
         $sql .= " LIMIT :limit OFFSET :offset";
     }
-
-    // echo "SQL Query: " . $sql . "\n"; // Debugging line to check the final SQL query
-    
+ 
+    // :owner_id is bound only if the final SQL actually uses it
+    if (strpos($sql, ':owner_id') !== false) {
+        $params[':owner_id'] = $owner;
+    }
+ 
     $stmt = $db->prepare($sql);
-
-    $stmt->bindValue(':search_query', $search_query, PDO::PARAM_STR);
-    
-    $stmt->bindValue(':user', $_SESSION['user_id'] ?? null);
-
-    if (($public !== '1' or $category === 'favorites' or $category === 'saved') && !$id) {
-        $stmt->bindValue(':owner_id', $owner);
+    foreach ($params as $name => $value) {
+        $stmt->bindValue($name, $value, is_int($value) ? PDO::PARAM_INT : PDO::PARAM_STR);
     }
-    
-    if ($id) {
-        $stmt->bindValue(':initial_recipe_id', $id, PDO::PARAM_INT);
+    if (!$isRandom) {
+        $stmt->bindValue(':limit', max(1, min((int)$opts['limit'], 100)), PDO::PARAM_INT);
+        $stmt->bindValue(':offset', max(0, (int)$opts['offset']), PDO::PARAM_INT);
     }
-    
-    if (!empty($ingredients_filter)) {
-        $ingredients_filter = array_map('strtolower', $ingredients_filter);
-        $stmt->bindValue(':ingredients', '{' . implode(',', $ingredients_filter) . '}');
-    }
-
-    if ($course_type) {
-        $stmt->bindValue(':course_type', $course_type);
-    }
-
-    if ($time !== null && $time !== '') {
-        $stmt->bindValue(':recipe_time', $time);
-    }
-    
-    if (!empty($attributes_filter)) {
-        $stmt->bindValue(':attributes', '{' . implode(',', $attributes_filter) . '}');
-    }
-
-    if ($action !== 'random') {
-        $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
-        $stmt->bindValue(':offset', $offset, PDO::PARAM_INT);
-    }
-    
-    // Do I even have any post request to this api? TODO check delete
-    $fetchRequest = $_SERVER['REQUEST_METHOD'] === 'POST';
+ 
     $stmt->execute();
-    $result = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-    if ($fetchRequest) {
-        echo json_encode($result);
-        exit;
-    } else {
-        return $result;
+    $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($rows as &$row) {
+        $row['recipe_tags'] = json_decode($row['recipe_tags'] ?? '[]', true);
     }
+    unset($row);
+    return $rows;
 }

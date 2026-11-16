@@ -11,17 +11,10 @@ $requestUri = trim($requestUri, '/');
 
 $userLoggedIn = isset($_SESSION['user_id']);
 
-echo '<pre>';
-echo 'Session ID: ' . session_id() . "\n";
-echo 'Session Data: ';
-var_dump($_SESSION);
-var_dump($userLoggedIn);
-echo '</pre>';
-
 if (preg_match('/\/recipe\/(\d+)/', $requestUri, $matches)) {
     $recipeId = filter_var($matches[1], FILTER_VALIDATE_INT);
     if ($recipeId) {
-        $recipe = getRecipeById($recipeId);
+        $recipe = getRecipe($recipeId);
     }
 }
 
@@ -32,11 +25,10 @@ if (preg_match('/\/recipe\/(\d+)/', $requestUri, $matches)) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script>try{var t=localStorage.getItem('theme');if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com/" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Epilogue:ital,wght@0,100..900;1,100..900&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&icon_names=add,add_a_photo,bookmark,check_circle,chef_hat,circle,close,cooking,filter_list,group,link,logout,open_in_new,publish,search,shuffle,sort,timer,visibility" />
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&icon_names=add,add_a_photo,bookmark,check_circle,chef_hat,circle,close,cooking,filter_list,fitness_center,group,link,logout,open_in_new,publish,question_mark,search,shuffle,sort,timer,visibility" />
     <link rel="stylesheet" href="/assets/style.css">
     <?php if ($recipe): ?>
         <title><?php echo htmlspecialchars($recipe['title']); ?></title>
@@ -51,7 +43,6 @@ if (preg_match('/\/recipe\/(\d+)/', $requestUri, $matches)) {
     <div class="modal-overlay hidden" id="modal-overlay"></div>
     <?php echo getNavBar(true); ?>
     <?php echo getExpandedModal(); ?>
-    <?php echo getUserProfileModal(); ?>
     <?php echo getFilterMenu(); ?>
 
     <?php if ($recipe): ?>
@@ -68,7 +59,36 @@ if (preg_match('/\/recipe\/(\d+)/', $requestUri, $matches)) {
         <div class="sub-category-buttons"></div>
         <div class="button-container">
             <div>
-                <button id="sort-button"><span class="material-symbols-outlined">sort</span>Sort</button>
+                <label class="sort-control" for="sort-select">
+                    <span class="material-symbols-outlined">sort</span>
+                    <select id="sort-select">
+                        <option value="">Best match</option>
+                        <optgroup label="Alphabetical">
+                            <option value="title_asc">A → Z</option>
+                            <option value="title_desc">Z → A</option>
+                        </optgroup>
+                        <optgroup label="Time">
+                            <option value="prep_time">Quickest to prep</option>
+                            <option value="total_time">Quickest overall</option>
+                        </optgroup>
+                        <optgroup label="Popularity">
+                            <option value="popular">Most popular</option>
+                            <?php if (!empty($_SESSION['user_id'])): ?>
+                                <option value="go_to">My go-to recipes</option>
+                            <?php endif; ?>
+                        </optgroup>
+                        <optgroup label="Nutrition (per serving)">
+                            <option value="calories_asc">Fewest calories</option>
+                            <option value="calories_desc">Most calories</option>
+                            <option value="protein_desc">Most protein</option>
+                            <option value="protein_asc">Least protein</option>
+                        </optgroup>
+                        <optgroup label="Date">
+                            <option value="newest">Newest</option>
+                            <option value="oldest">Oldest</option>
+                        </optgroup>
+                    </select>
+                </label>
                 <button id="filter-button"><span class="material-symbols-outlined">filter_list</span>Filters</button>
                 <button class="random-button" id="random-button"><span class="material-symbols-outlined">shuffle</span>Surprise Me</button>
             </div>

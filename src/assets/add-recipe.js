@@ -1,135 +1,24 @@
-import { toggleHidden } from "./recipes.js";
+import { toggleHidden } from "./recipe-data.js";
+import { addIngredient, addStep, addIngredientSection, addStepSection } from "./sections.js";
+import { toast } from './toast.js';
 
-const units = [
-    "g", "kg", "mg",
-    "ml", "l", "cl", "dl",
-    "tsp", "tbsp", "cup", "oz", "lb"
-];
-
-const unitMap = {
-    gram: "g",
-    grams: "g",
-    kilogram: "kg",
-    kilograms: "kg",
-    milligram: "mg",
-    milligrams: "mg",
-    milliliter: "ml",
-    milliliters: "ml",
-    liter: "l",
-    liters: "l",
-    centiliter: "cl",
-    centiliters: "cl",
-    deciliter: "dl",
-    deciliters: "dl",
-    teaspoon: "tsp",
-    teaspoons: "tsp",
-    tablespoon: "tbsp",
-    tablespoons: "tbsp",
-    cup: "cup",
-    cups: "cup",
-    ounce: "oz",
-    ounces: "oz",
-    pound: "lb",
-    pounds: "lb"
-};
-
-const softWords = ["pinch", "dash", "handful", "splash", "to taste"];
-
-let stepSectionCount = 1;
-let ingredientSectionCount = 1;
 let lastSelectedIngredientSection = null;
 let lastSelectedIngredientItem = null;
 let lastSelectedInstructionSection = null;
 let lastSelectedInstructionBox = null;
 
-function normalize(input) {
-    return input.toLowerCase().replace(",",".").replace(/\s+/g, ' ').trim();
-}
 
-function parseFraction(str) {
-    if (str.includes('/')) {
-        const [numerator, denominator] = str.split('/').map(Number);
-        if (!isNaN(numerator) && !isNaN(denominator) && denominator !== 0) {
-            return numerator / denominator;
-        }
-    }
-    return null;
-}
-
-function normalizeUnit(unit) {
-    return unitMap[unit] || unit;
-}
-
-const sizeWords = ['extra-large', 'extra large', 'large', 'medium', 'small'];
-
-function parseIngredient(input) {
-    const raw = input;
-    input = normalize(input);
-
-    let amount     = null;
-    let unit       = null;
-    let size       = null;
-    let ingredient = input;
-    let soft       = false;
-
-    // Soft ingredients (e.g. "pinch of salt")
-    for (let softWord of softWords) {
-        if (input.includes(softWord)) {
-            return {
-                raw,
-                amount: null,
-                unit: softWord,
-                size: null,
-                ingredient: input.replace(softWord, "").replace("of", "").trim(),
-                soft: true
-            };
-        }
-    }
-
-    let words = input.split(' ');
-
-    // Amount
-    let first    = words[0];
-    let fraction = parseFraction(first);
-    if (fraction !== null) {
-        amount = fraction;
-        words.shift();
-    } else if (!isNaN(first)) {
-        amount = parseFloat(first);
-        words.shift();
-    }
-
-    // Unit
-    if (words.length && units.includes(words[0])) {
-        unit = normalizeUnit(words[0]);
-        words.shift();
-    }
-
-    // Size — only if no unit was found (e.g. "1 large tomato" not "1 cup large oats")
-    if (!unit && words.length) {
-        const maybeSizeWord = words.join(' ');
-        for (let s of sizeWords) {
-            if (maybeSizeWord.startsWith(s + ' ') || maybeSizeWord === s) {
-                size  = s;
-                words = words.slice(s.split(' ').length); // handles "extra large" (2 words)
-                break;
-            }
-        }
-    }
-
-    ingredient = words.join(' ');
-
-    return { raw, amount, unit, size, ingredient, soft };
-}
-
-function getLastSection(selector) {
-    const sections = document.querySelectorAll(selector);
-    return sections.length ? sections[sections.length - 1] : null;
-}
-
-export function init(targetElement) {
+export async function init(targetElement) {
+    console.log("init called for add-recipe.js" + (targetElement ? ` on ${targetElement.id}` : ''));
 
     const ingredientSuggestions = targetElement.querySelector('.autocomplete-list');
+
+    targetElement.addEventListener('submit', (e) => {
+        if (targetElement.dataset.mode === 'edit') return;
+        console.log("submitting add recipe form");
+        handleAddRecipe(e);
+    })
+    targetElement.hasListener = true;
 
     const add_button = document.querySelector('#add-button');
     
@@ -178,45 +67,144 @@ export function init(targetElement) {
     //     });
     // }
 
+    const tagsContainer = targetElement.querySelector(".tags");
+    const tagSearchInput = targetElement.querySelector(".tag_search");
+    const tagSuggestions = targetElement.querySelector(".tag-suggestions");
     const addTagButton = targetElement.querySelector("#add-tag");
-    if (addTagButton) {
-        addTagButton.addEventListener('click', () => {
-            const tagSearchInput = targetElement.querySelector(".tag_search");
-            const tagName = tagSearchInput.value.trim();
-            if (!tagName) return;
 
-            // const tagId = tagSearchInput.dataset.tagId || null;
-            const tagsContainer = targetElement.querySelector(".tags");
-
+    if (tagsContainer && tagSearchInput) {
+        const hasTag = (name) =>
+            [...tagsContainer.querySelectorAll('input[name="tags[]"]')]
+                .some(input => input.value.toLowerCase() === name.toLowerCase());
+    
+        // Hide suggestions that are already added
+        const syncSuggestions = () => {
+            if (!tagSuggestions) return;
+            tagSuggestions.querySelectorAll('.tag-suggestion').forEach(btn => {
+                btn.hidden = hasTag(btn.dataset.tagName);
+            });
+        };
+    
+        const addTag = (rawName) => {
+            const tagName = rawName.trim();
+            if (!tagName || hasTag(tagName)) return false;
+        
             const tagDiv = document.createElement("div");
             tagDiv.className = "tag-item";
+        
             const span = document.createElement("span");
             span.textContent = tagName;
             tagDiv.appendChild(span);
-
+        
             const input = document.createElement("input");
             input.type = "hidden";
             input.name = "tags[]";
-            // input.value = tagId ? tagId : '';
             input.value = tagName;
             tagDiv.appendChild(input);
-
-            const removetagButton = document.createElement("button");
-            removetagButton.type = "button";
-            removetagButton.className = "remove-tag";
-            removetagButton.textContent = "x";
-            tagDiv.appendChild(removetagButton);
-
-            tagsContainer.appendChild(tagDiv);
-            tagSearchInput.value = "";
-            tagSearchInput.dataset.tagId = "";
-
-            const removetagsButton = tagDiv.querySelector(".remove-tag");
-            removetagsButton.addEventListener('click', () => {
+        
+            const removeTagButton = document.createElement("button");
+            removeTagButton.type = "button";
+            removeTagButton.className = "remove-tag";
+            removeTagButton.textContent = "x";
+            removeTagButton.addEventListener('click', () => {
                 tagDiv.remove();
+                syncSuggestions();
             });
+            tagDiv.appendChild(removeTagButton);
+        
+            tagsContainer.appendChild(tagDiv);
+            syncSuggestions();
+            return true;
+        };
+    
+        const addFromInput = () => {
+            if (addTag(tagSearchInput.value)) {
+                tagSearchInput.value = "";
+                tagSearchInput.dataset.tagId = "";
+            }
+        };
+    
+        if (addTagButton) {
+            addTagButton.addEventListener('click', addFromInput);
+        }
+    
+        // Optional: Enter adds the tag instead of submitting the form
+        tagSearchInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                addFromInput();
+            }
         });
+    
+        if (tagSuggestions) {
+            try {
+                const res = await fetch('/api/get_tags.php');
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const tags = await res.json();
+            
+                tags.forEach(tag => {
+                    const btn = document.createElement("button");
+                    btn.type = "button";
+                    btn.className = "tag-suggestion";
+                    btn.textContent = tag.name;
+                    btn.dataset.tagName = tag.name;
+                    btn.dataset.tagId = tag.id;
+                    btn.addEventListener('click', () => addTag(tag.name));
+                    tagSuggestions.appendChild(btn);
+                });
+            
+                syncSuggestions();
+            } catch (err) {
+                console.error('Failed to load tag suggestions:', err);
+            }
+        }
     }
+    
+    // const tagSuggestions = targetElement.querySelector('.tag-suggestions');
+    // if (tagSuggestions) {
+    //     const res = await fetch(`/api/get_tags.php`);
+    //     const data = await res.json();
+    // }
+
+    // const addTagButton = targetElement.querySelector("#add-tag");
+    // if (addTagButton) {
+    //     addTagButton.addEventListener('click', () => {
+    //         const tagSearchInput = targetElement.querySelector(".tag_search");
+    //         const tagName = tagSearchInput.value.trim();
+    //         if (!tagName) return;
+
+    //         // const tagId = tagSearchInput.dataset.tagId || null;
+    //         const tagsContainer = targetElement.querySelector(".tags");
+
+    //         const tagDiv = document.createElement("div");
+    //         tagDiv.className = "tag-item";
+    //         const span = document.createElement("span");
+    //         span.textContent = tagName;
+    //         tagDiv.appendChild(span);
+
+    //         const input = document.createElement("input");
+    //         input.type = "hidden";
+    //         input.name = "tags[]";
+    //         // input.value = tagId ? tagId : '';
+    //         input.value = tagName;
+    //         tagDiv.appendChild(input);
+
+    //         const removetagButton = document.createElement("button");
+    //         removetagButton.type = "button";
+    //         removetagButton.className = "remove-tag";
+    //         removetagButton.textContent = "x";
+    //         tagDiv.appendChild(removetagButton);
+
+    //         tagsContainer.appendChild(tagDiv);
+    //         tagSearchInput.value = "";
+    //         tagSearchInput.dataset.tagId = "";
+
+    //         const removetagsButton = tagDiv.querySelector(".remove-tag");
+    //         removetagsButton.addEventListener('click', () => {
+    //             tagDiv.remove();
+    //         });
+    //     });
+    // }
 
     const addStepButton = targetElement.querySelector("#add-step");
     if (addStepButton) {
@@ -288,9 +276,6 @@ export function init(targetElement) {
             if (box) {
                 lastSelectedInstructionBox = box;
             }
-            // if (e.target.matches('.add-step')) {
-            //     addStep(e.target);
-            // }
         });
 
         instructionsElement.addEventListener('focusin', (e) => {
@@ -306,125 +291,6 @@ export function init(targetElement) {
     }
 };
 
-function addStepSection() {
-    const i = stepSectionCount++;
-    const section = document.createElement("div");
-    Object.assign(section, {
-        className: 'section-group',
-        innerHTML: `
-    <div class="flex">
-        <span>•</span>
-        <input class="section-title-input" type="text" name="step_sections[${i}][title]"
-        placeholder="Section title (optional)" value="">
-    </div>
-    <div class="instruction-container">
-    </div>
-    `
-    });
-    section.dataset.section = i;
-    section.dataset.type = 'steps';
-    const container = document.getElementById('instructions');
-    container.insertBefore(section, container.lastChild);
-    updateStepNumbers();
-    addStep();
-}
-
-function addIngredientSection() {
-    const i = ingredientSectionCount++;
-    const section = document.createElement("div");
-    Object.assign(section, {
-        className: 'section-group',
-        innerHTML: `
-    <div class="flex">
-        <span>•</span>
-        <input class="section-title-input" type="text" name="ingredient_sections[${i}][title]"
-        placeholder="Section title (optional)" value="">
-    </div>
-    <div class="ingredients-container">
-    </div>
-    `
-    });
-    section.dataset.section = i;
-    section.dataset.type = 'ingredients';
-    const container = document.getElementById('ingredients');
-    container.insertBefore(section, container.lastChild);
-    addIngredient();
-}
-
-export function addStep(currentInput = null) {
-    const section = currentInput ? currentInput.closest(".section-group") : document.querySelector('#instructions .section-group:last-of-type');
-    if (!section) return;
-
-    const instructionsContainer = section.querySelector(".instruction-container");
-    if (!instructionsContainer) return;
-
-    const stepCount = instructionsContainer.children.length + 1;
-    const number = String(stepCount).padStart(2, '0');
-    const sectionIndex = section.dataset.section || 0;
-
-    const box = document.createElement("div");
-    box.classList.add("instruction-box");
-    box.innerHTML = `
-    <span class="instruction-number">${number}</span>
-    <input class="instruction-text" type="text" name="step_sections[${sectionIndex}][steps][]" placeholder="Step ${stepCount}">
-    `;
-
-    if (currentInput) {
-        const currentBox = currentInput.closest(".instruction-box");
-        if (currentBox) {
-            currentBox.after(box);
-        } else {
-            instructionsContainer.appendChild(box);
-        }
-    } else {
-        instructionsContainer.appendChild(box);
-    }
-
-    updateStepNumbers();
-    box.querySelector(".instruction-text").focus();
-}
-
-export function addIngredient(currentInput = null) {
-    console.log("currentInput", currentInput);
-    const section = currentInput ? currentInput.closest('.section-group') : document.querySelector('#ingredients .section-group:last-of-type');
-    console.log("section found", section);
-    if (!section) return;
-
-    const container = section.querySelector('.ingredients-container');
-    if (!container) return;
-
-    const sectionIndex = section.dataset.section || 0;
-    const item = currentInput ? currentInput.closest('.ingredient-item') : null;
-
-    const newItem = document.createElement('div');
-    newItem.classList.add('ingredient-item');
-    newItem.innerHTML = `<span>•</span><input class="ingredient-text" type="text" name="ingredient_sections[${sectionIndex}][ingredients][]" autocomplete="off">`;
-
-    if (item) {
-        item.after(newItem);
-    } else {
-        const lastItem = container.querySelector('.ingredient-item:last-child');
-        if (lastItem) {
-            lastItem.after(newItem);
-        } else {
-            container.appendChild(newItem);
-        }
-    }
-
-    newItem.querySelector('input').focus();
-}
-
-export function updateStepNumbers() {
-    const sections = document.querySelectorAll('#instructions .section-group');
-    sections.forEach((section) => {
-        const numbers = section.querySelectorAll('.instruction-number');
-        numbers.forEach((num, index) => {
-            const count = index + 1;
-            num.textContent = String(count).padStart(2, '0');
-        });
-    });
-}
-
 export async function handleAddRecipe(e) {
     e.preventDefault();
 
@@ -439,13 +305,11 @@ export async function handleAddRecipe(e) {
     const result = await response.json();
     
     if (result.success) {
-        // TODO REPLACE WITH TOAST
-        alert('RECIPE ADDED');
+        toast.success('Recipe added successfully');
         form.reset();
     }
     else {
-        console.log('error?');
-        alert(result.error);
+        toast.error('Failed to add recipe');
     }
 }
 
@@ -463,11 +327,11 @@ export async function handleAddFromUrl(e) {
     const result = await response.json();
     
     if (result.success) {
-        alert('RECIPE ADDED');
+        toast.success('Recipe added successfully');
         form.reset();
     }
     else {
         console.log('error?');
-        alert(result.error);
+        toast.error('Failed to add recipe');
     }
 }

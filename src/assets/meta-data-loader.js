@@ -1,8 +1,9 @@
 let input;
 let button;
+const selectedCourses = new Set();
+let courseContainer = null;
 
 window.metadata = {
-    attributes: new Map(),
     courseTypes: new Map()
 };
 
@@ -21,10 +22,6 @@ async function loadTags() {
         window.metadata.courseTypes.set(courseType.id, courseType);
     });
 
-    // metadata.attributes.forEach(attribute => {
-    //     window.metadata.attributes.set(attribute.id, attribute);
-    // });
-
     renderRecipeMetaData(metadata);
 }
 
@@ -35,38 +32,25 @@ function initTags() {
 
 function renderRecipeMetaData(metadata) {
 
-    const attributesContainer = document.querySelectorAll('.attributes');
     const courseDropdown = document.querySelectorAll('.course-dropdown');
     const courseTypesContainer = document.querySelectorAll('.course-types-container');
 
     const courseTypes = metadata.courseTypes || [];
-    const attributes = metadata.attributes || [];
 
     console.log("course dropdown", courseDropdown);
 
     if (courseDropdown.length > 0) {
         courseTypes.forEach(tag => {
             let element = createMetaElement(tag, courseTypesContainer[0], "course");
-            element.addEventListener('click', (evt) => {
-                toggleCourseType(element, evt.currentTarget.closest('fieldset'));
-            });
+            // element.addEventListener('click', (evt) => {
+            //     toggleCourseType(element, evt.currentTarget.closest('fieldset'));
+            // });
             let option = document.createElement('option');
             option.value = tag.id;
             option.textContent = tag.name;
             courseDropdown[0].appendChild(option);
         });
     }
-
-    
-    
-    attributesContainer.forEach(container => {
-        attributes.forEach(tag => {
-            let element = createMetaElement(tag, container, "attribute");
-            element.addEventListener('click', (evt) => {
-                toggleAttribute(element, evt.currentTarget.closest('fieldset'));
-            });
-        });
-    });
 }
 
 function createMetaElement(tag, container, className) {
@@ -79,24 +63,14 @@ function createMetaElement(tag, container, className) {
     return element;
 }
 
-function toggleCourseType(element, fieldset) {
-    let activeCourceType = fieldset.querySelector('.course.selected');
-    if (activeCourceType) {
-        activeCourceType.classList.remove('selected');
-    }
-    element.classList.add('selected');
-    fieldset.querySelector('#selected-course').value = element.dataset.id;
-}
-
-function toggleAttribute(element, fieldset) {
-    if (element.classList.contains('selected')) {
-        element.classList.remove('selected');
-    } else {
-        element.classList.add('selected');
-    }
-
-    fieldset.querySelector('#selected-attributes').value = JSON.stringify([...fieldset.querySelectorAll('.attribute.selected')].map(el => el.dataset.id));
-}
+// function toggleCourseType(element, fieldset) {
+//     let activeCourceType = fieldset.querySelector('.course.selected');
+//     if (activeCourceType) {
+//         activeCourceType.classList.remove('selected');
+//     }
+//     element.classList.add('selected');
+//     fieldset.querySelector('#selected-course').value = element.dataset.id;
+// }
 
 function submitTag() {
     const name = input.value.trim();
@@ -112,6 +86,16 @@ function submitTag() {
     });
 }
 
+
+function renderCourseSelection() {
+    document.getElementById('selected-course').value = [...selectedCourses].join(',');
+    courseContainer?.querySelectorAll('[data-id]').forEach(el => {
+        const on = selectedCourses.has(el.dataset.id);
+        el.classList.toggle('selected', on);
+        el.setAttribute('aria-pressed', String(on));
+    });
+}
+
 function initListners() {
     if (input) {
         input.addEventListener('keydown', e => {
@@ -123,4 +107,14 @@ function initListners() {
         input.addEventListener('blur', submitTag);
         button.addEventListener('click', submitTag);
     }
+
+    courseContainer = document.querySelector('.course-types-container');
+    
+    courseContainer?.addEventListener('click', e => {
+        const chip = e.target.closest('[data-id]');
+        if (!chip) return;
+        const id = chip.dataset.id;
+        selectedCourses.has(id) ? selectedCourses.delete(id) : selectedCourses.add(id);
+        renderCourseSelection();
+    });
 }

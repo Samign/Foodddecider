@@ -33,19 +33,69 @@ document.addEventListener('DOMContentLoaded', () => {
   // 2. Recipe Management (Only runs if add/edit recipe modal exists)
   loadModuleIfPresent('#add-recipe-form', async (element) => {
     // Load multiple related scripts in parallel when the form is present
-    const [dragDrop, addRecipe] = await Promise.all([
+    const [dragDrop, addRecipe, sections, forkRecipe] = await Promise.all([
       import('./drag-and-drop.js'),
-      import('./add-recipe.js')
+      import('./add-recipe.js'),
+      import('./sections.js'),
+      import('./fork-recipe.js')
     ]);
 
     if (dragDrop.init) dragDrop.init(element);
     if (addRecipe.init) addRecipe.init(element);
+    if (forkRecipe.init) forkRecipe.init();
   });
 
   // 3. Recipe Search & Suggestions
   loadModuleIfPresent('.ingredient-text', () => import('./suggestions.js'));
 
   // 4. Feed & Grid Features
-  loadModuleIfPresent('#recipe-grid', () => import('./recipes.js'));
+  loadModuleIfPresent('#recipe-list', () => import('./recipes.js'));
 
+  loadModuleIfPresent('#expanded-modal', () => import('./recipe-modal.js'));
+  loadModuleIfPresent('#expanded-modal', () => import('./add_to_list.js'));
+
+  loadModuleIfPresent('#filter-menu', () => import('./tags.js'));
+
+  // 5. Social Interactions & Lists
+  loadModuleIfPresent('#social-modal', () => import('./social-interactions.js'));
+
+  loadModuleIfPresent('#shopping-list-modal', () => import('./list.js'));
+
+  const profileModal = document.getElementById('profile-modal');
+  if (profileModal) {
+      document.querySelector('.current-user').addEventListener('click', () => {
+          profileModal.classList.toggle('hidden');
+      });
+  }
+  
+});
+
+const root = document.documentElement;
+const media = matchMedia('(prefers-color-scheme: dark)');
+const toggle = document.getElementById('theme-toggle');
+const isDark = () => (root.dataset.theme ? root.dataset.theme === 'dark' : media.matches);
+
+function syncToggle() {
+    if (!toggle) return;
+    toggle.querySelector('.material-symbols-outlined').textContent = isDark() ? 'light_mode' : 'dark_mode';
+    toggle.querySelector('.theme-label').textContent = isDark() ? 'Light mode' : 'Dark mode';
+}
+
+toggle?.addEventListener('click', () => {
+    const next = isDark() ? 'light' : 'dark';
+    root.dataset.theme = next;
+    try { localStorage.setItem('theme', next); } catch {}
+    syncToggle();
+});
+
+media.addEventListener('change', syncToggle);
+syncToggle();
+
+document.addEventListener('click', (e) => {
+  if (e.target.matches('.close-button')) {
+    const modal = e.target.closest('.modal');
+    if (modal) {
+      modal.classList.add('hidden');
+    }
+  }
 });

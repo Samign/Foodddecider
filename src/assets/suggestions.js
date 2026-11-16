@@ -18,23 +18,38 @@ function parseIngredientInput(raw) {
     };
 }
 
-export function init(targetElement) {
-    console.log("suggestions.js loaded");
-    document.addEventListener("input", async function(e) {
-        if (!e.target.classList.contains("ingredient-text")) return;
-        const raw = e.target.value.trim();
+let initialized = false;
+const DEBOUNCE_MS = 150;
+const timers     = new WeakMap();   // input -> debounce timer
+const requestIds = new WeakMap();   // input -> latest request number
 
-        const { query } = parseIngredientInput(raw);
-        if (query.length < 2) return clearSuggestions(e.target);
+// Filter inputs hold only a name: no amount/unit parsing, no hidden ids
+const isPlain = input => !!input.closest('[data-plain-ingredients]');
 
-        const res = await fetch(`/api/search_ingredients.php?q=${encodeURIComponent(query)}`);
-        const data = await res.json();
-        showSuggestions(e.target, data, raw, query);
+export function init() {
+    if (initialized) return;        // safe to call from more than one page script
+    initialized = true;
+
+    document.addEventListener("input", function (e) {
+        const input = e.target;
+        if (!input.classList?.contains("ingredient-text")) return;
+
+        const raw = input.value.trim();
+        const query = isPlain(input) ? raw : parseIngredientInput(raw).query;
+
+        clearTimeout(timers.get(input));
+        if (query.length < 2) {
+            requestIds.set(input, (requestIds.get(input) ?? 0) + 1);   // drop in-flight replies
+            return clearSuggestions(input);
+        }
+        timers.set(input, setTimeout(() => fetchSuggestions(input, raw, query), DEBOUNCE_MS));
     });
 
-    document.addEventListener("keydown", function(e) {
-        if (!e.target.classList.contains("ingredient-text")) return;
+    document.addEventListener("keydown", function (e) {
+        if (!e.target.classList?.contains("ingredient-text")) return;
         const list = getList(e.target);
+        if (!list) return;
+
         const items = list.querySelectorAll(".autocomplete-item");
         const active = list.querySelector(".autocomplete-item.active");
 
@@ -55,7 +70,9 @@ export function init(targetElement) {
                 (active.previousElementSibling ?? items[items.length - 1]).classList.add("active");
             }
         } else if (e.key === "Tab" || e.key === "Enter") {
-            const target = active ?? items[0];
+            // Add menu: unchanged (falls back to the first item).
+            // Filter: only a highlighted item is accepted; otherwise typed text stands.
+            const target = active ?? (isPlain(e.target) ? null : items[0]);
             if (target) {
                 e.preventDefault();
                 target.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
@@ -65,16 +82,31 @@ export function init(targetElement) {
         }
     });
 
-    document.addEventListener("click", function(e) {
-        if (!e.target.classList.contains("ingredient-text")) {
-            document.querySelectorAll(".autocomplete-list").forEach(l => l.innerHTML = "");
+    document.addEventListener("click", function (e) {
+        if (!e.target.classList?.contains("ingredient-text")) {
+            document.querySelectorAll(".autocomplete-list").forEach(l => l.replaceChildren());
         }
     });
-};
+}
+
+async function fetchSuggestions(input, raw, query) {
+    const id = (requestIds.get(input) ?? 0) + 1;
+    requestIds.set(input, id);
+    try {
+        const res = await fetch(`/api/search_ingredients.php?q=${encodeURIComponent(query)}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (requestIds.get(input) !== id) return;      // a newer keystroke superseded this reply
+        showSuggestions(input, data, raw, query);
+    } catch (err) {
+        console.error("Ingredient suggestions failed:", err);
+    }
+}
 
 function showSuggestions(input, items, raw, ingredientQuery) {
     const list = getList(input);
-    list.innerHTML = "";
+    if (!list) return;
+    list.replaceChildren();
     if (!items.length) return;
 
     items.forEach(item => {
@@ -84,7 +116,6 @@ function showSuggestions(input, items, raw, ingredientQuery) {
         const name = document.createElement("span");
         name.className = "autocomplete-name";
         name.textContent = item.name;
-
         div.appendChild(name);
 
         div.addEventListener("mousedown", (e) => {
@@ -97,6 +128,12 @@ function showSuggestions(input, items, raw, ingredientQuery) {
 }
 
 function selectIngredient(input, item, raw, ingredientQuery) {
+    if (isPlain(input)) {              // filter: just the name
+        input.value = item.name;
+        clearSuggestions(input);
+        return;
+    }
+
     const lowerRaw = raw.toLowerCase();
     const lowerQuery = ingredientQuery.toLowerCase();
     const idx = lowerRaw.lastIndexOf(lowerQuery);
@@ -117,9 +154,11 @@ function selectIngredient(input, item, raw, ingredientQuery) {
 }
 
 function getList(input) {
-    return input.parentElement.parentElement.querySelector(".autocomplete-list");
+    // the row's own list first (filter), then the old grandparent lookup (add menu)
+    return input.parentElement.querySelector(".autocomplete-list")
+        ?? input.parentElement.parentElement.querySelector(".autocomplete-list");
 }
 
 function clearSuggestions(input) {
-    getList(input).innerHTML = "";
+    getList(input)?.replaceChildren();
 }

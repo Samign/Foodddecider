@@ -2,73 +2,59 @@
 require_once '../includes/db.php';
 require_once '../includes/recipe_fetcher.php';
 
-$query = $_GET['search'] ?? '';
+$query = trim($_GET['q'] ?? '');
 
 $db = db();
-$pdo = $db->getPdo();
 
-$attributes_filter = [];
 $courseType = null;
-$ingredients_filter = null;
-$search_query = null;
+$search_terms = [];
 
-if ($query) {
+if ($query !== '') {
 
-    // split into search into tokens
+    // Split search into lowercase tokens
     $tokens = preg_split('/\s+/', strtolower($query));
 
-    $attributeMap = $pdo->query("SELECT id, LOWER(name) as name FROM attributes")
+    // Fetch course types (id => name)
+    $courseTypeMap = $db->query("SELECT id, LOWER(name) as name FROM course_types")
                         ->fetchAll(PDO::FETCH_KEY_PAIR);
-
-    $courseTypeMap = $pdo->query("SELECT id, LOWER(name) as name FROM course_types")
-                        ->fetchAll(PDO::FETCH_KEY_PAIR);
-
-    $ingredient_terms = [];
 
     foreach ($tokens as $word) {
-        
-        // Check attribute match
-        if (in_array($word, $attributeMap)) {
-            $attributes_filter[] = array_search($word, $attributeMap);
+        // Check if word matches a course type (e.g., "dinner", "dessert")
+        if (in_array($word, $courseTypeMap, true)) {
+            $courseType = array_search($word, $courseTypeMap, true);
             continue;
         }
 
-        // Check course type match
-        if (in_array($word, $courseTypeMap)) {
-            $courseType = array_search($word, $courseTypeMap);
-            continue;
-        }
-
-        // treat as ingredient
-        $ingredient_terms[] = $word;
+        // Keep all other words for general text search (title, description, tags, ingredients)
+        $search_terms[] = $word;
     }
 
-    // combine remainder into search terms for text search
-    if (!empty($ingredient_terms)) {
-        $ingredients_filter = implode(' ', $ingredient_terms);
-        $search_query = $ingredients_filter;
-    }
+    // Combine remaining words into a general search string
+    $general_search_query = !empty($search_terms) ? implode(' ', $search_terms) : $query;
 
-    $results = getRecipeById(
-        search_query: $search_query, 
-        attributes_filter: $attributes_filter, 
-        course_type: $courseType, 
-        ingredients_filter: $ingredients_filter,
-        public: '1',
-        limit: 20,
-        offset: 0
-    );
+    $opts = [
+        'search_query'       => $general_search_query, // Passes free-text query for titles/descriptions
+        'course_type'        => $courseType,
+        'ingredients_filter' => null,                  // Don't restrict strictly to ingredient tables unless explicitly needed
+        'public'             => '1',
+        'limit'              => 20,
+        'offset'             => 0
+    ];
+    
+    $results = getRecipeCards($opts);
 
-    // grab users aswell
-    $user_stmt = $pdo->prepare("SELECT * FROM users WHERE username ILIKE ?");
+    // Fetch matching user profiles
+    $user_stmt = $db->prepare("SELECT id, username, bio, image_base FROM users WHERE username ILIKE ?");
     $user_stmt->execute(["%$query%"]);
     $user_results = $user_stmt->fetchAll();
+
 } else {
     $results = [];
     $user_results = [];
 }
 
+header('Content-Type: application/json');
 echo json_encode([
     'recipes' => $results,
-    'users' => $user_results
+    'users'   => $user_results
 ]);

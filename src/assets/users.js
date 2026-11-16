@@ -1,4 +1,5 @@
 // import { setCurrentExpanded } from "./popstate.js";
+import { toast } from './toast.js';
 
 document.addEventListener('DOMContentLoaded', () => {
 
@@ -19,31 +20,13 @@ document.addEventListener('DOMContentLoaded', () => {
               if (data.success) {
                   followButton.textContent = followButton.textContent === 'Follow' ? 'Unfollow' : 'Follow';
               } else {
-                  alert(data.error || 'Failed to update follow status.');
+                  toast.error(data.error || 'Failed to update follow status.');
               }
           })
           .catch((error) => {
-              alert('An error occurred while trying to update follow status.' + 'error: '+ error);
+              toast.error('An error occurred while trying to update follow status.' + 'error: '+ error);
           });
         });
-    }
-
-    const path = window.location.pathname;
-    const userMatch = path.match(/^\/user\/([^\/]+)\/?$/);
-    if (userMatch) {
-        console.log("Initial user linked");
-        const username = userMatch[1];
-
-        window.history.replaceState({type: 'home'},
-            '',
-            '/'
-        );
-
-        window.history.pushState(
-            {type: 'user', slug: username},
-            '',
-            `/user/${username}`
-        );
     }
 
     const followerCount = document.getElementById('follower-count');
@@ -70,11 +53,6 @@ function showFollowerList(event) {
                 const userElement = document.createElement('div');
                 userElement.className = 'follower-item';
                 userElement.addEventListener('click', () => {
-                    window.history.pushState(
-                        {type: 'user', slug: user.username},
-                        '',
-                        `/user/${user.username}`
-                    );
                     window.location.href = `/user/${user.username}`;
                 });
                 list.appendChild(userElement);
@@ -89,15 +67,10 @@ function showFollowerList(event) {
             });
         })
         .catch(error => {
-            alert('Failed to load followers.' + 'error: ' + error);
+            toast.error('Failed to load followers');
         });
 
-    modal.classList.remove('hidden');
-
-    const closeButton = modal.querySelector('.close-button');
-    closeButton.addEventListener('click', () => {
-        modal.classList.add('hidden');
-    });
+    // modal.classList.remove('hidden');
 }
 
 // export async function loadUser(username) {

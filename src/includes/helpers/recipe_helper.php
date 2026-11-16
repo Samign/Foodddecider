@@ -64,9 +64,7 @@ function saveTags(PDO $db, int $recipeId, array $tags): void {
     ");
  
     foreach ($tags as $tag) {
-        $tagId = ctype_digit((string) $tag)
-            ? (int) $tag
-            : findOrCreateTag($db, (string) $tag);
+        $tagId = ctype_digit((string) $tag) ? (int) $tag : findOrCreateTag($db, (string) $tag);
  
         $stmt->execute([
             ':recipe_id' => $recipeId,
@@ -92,7 +90,7 @@ function findOrCreateTag(PDO $db, string $tagName): int {
     }
  
     $stmt = $db->prepare("INSERT INTO tags (name, slug, is_featured, usage_count) VALUES (:name, :slug, :is_featured, :usage_count) ON CONFLICT (slug) DO UPDATE SET name = tags.name RETURNING id");
-    $stmt->execute([':name' => $name, ':slug' => $slug, ':is_featured' => false, ':usage_count' => 1]);
+    $stmt->execute([':name' => $name, ':slug' => $slug, ':is_featured' => 0, ':usage_count' => 1]);
     return (int) $stmt->fetchColumn();
 }
 

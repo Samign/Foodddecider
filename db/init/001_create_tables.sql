@@ -160,3 +160,66 @@ CREATE TABLE IF NOT EXISTS ingredient_sections (
     title       VARCHAR(255),
     position    INT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS groups (
+    id SERIAL PRIMARY KEY,
+    owner_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    group_name VARCHAR(255) NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS group_members (
+    group_id INT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+    member_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    edit_rights BOOLEAN NOT NULL DEFAULT TRUE,
+    PRIMARY KEY (group_id, member_id)
+);
+
+CREATE TABLE IF NOT EXISTS group_invitations (
+    id SERIAL PRIMARY KEY,
+    group_id INT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+    invited_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    invited_by_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    status VARCHAR(20) NOT NULL DEFAULT 'pending',
+    can_edit BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (group_id, invited_user_id)
+); 
+
+CREATE TABLE IF NOT EXISTS group_recipes (
+    group_id INT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+    recipe_id INT NOT NULL REFERENCES recipes(id) ON DELETE CASCADE,
+    PRIMARY KEY (group_id, recipe_id)
+);
+
+CREATE TABLE IF NOT EXISTS shopping_lists (
+    id          SERIAL PRIMARY KEY,
+    user_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,   -- the owner
+    list_name   VARCHAR(255) NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE shopping_items (
+    id INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    list_id INT NOT NULL REFERENCES shopping_lists(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    -- amount NUMERIC,
+    -- unit TEXT,
+    -- size TEXT,
+    checked_at TIMESTAMPTZ,
+    position DOUBLE PRECISION NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS shopping_lists_user_id ON shopping_lists (user_id);
+
+-- Which groups a list is shared with
+CREATE TABLE IF NOT EXISTS shopping_list_groups (
+    list_id   INT NOT NULL REFERENCES shopping_lists(id) ON DELETE CASCADE,
+    group_id  INT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+    PRIMARY KEY (list_id, group_id)
+);
+
+-- The primary key covers "which groups is this list shared with"; this covers "which lists does this group see"
+CREATE INDEX IF NOT EXISTS shopping_list_groups_group_id ON shopping_list_groups (group_id);
+
+CREATE INDEX shopping_items_list_id ON shopping_items (list_id);

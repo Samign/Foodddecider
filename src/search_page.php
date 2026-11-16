@@ -1,14 +1,16 @@
+<?php
+require_once __DIR__ . '/includes/modules.php';
+?>
+
 <html>
 <head>
     <title>FoodDecider - Search Results</title>
-    <link rel="stylesheet" href="/assets/styles.css">
+    <link rel="stylesheet" href="./assets/style.css">
 </head>
 <body>
+    <?php echo getExpandedModal(); ?>
+    <?php echo getNavBar(); ?>
     <!-- Search bar -->
-    <form action="/search.html" method="GET">
-        <input type="text" name="q" placeholder="Search recipes or profiles...">
-        <button type="submit">Search</button>
-    </form>
 
     <div class="tabs">
         <button id="all-tab" class="active">All</button>
@@ -17,8 +19,9 @@
     </div>
 
     <h1>Search Results</h1>
-    <div id="recipe-list"></div>
+    <div id="recipe-search-list"></div>
     <div id="profile-results"></div>
-    <script type="module" src="/assets/search.js"></script>
+    <script type="module" src="./assets/search.js"></script>
+    <script type="module" src="./assets/main.js"></script>
 </body>
 </html>

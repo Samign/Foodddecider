@@ -37,3 +37,5 @@ $updateStmt->execute([
     ':image_base' => $recipePicture,
     ':id' => $recipeId
 ]);
+
+echo json_encode(['success' => true, 'recipe_id' => $recipeId]);

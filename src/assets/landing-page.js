@@ -39,6 +39,5 @@ function initEventListeners() {
 }
 
 function toggleLogin() {
-    loginModal.style.display = loginModalExpanded ? 'none' : 'block';
-    loginModalExpanded = !loginModalExpanded;
+    loginModal.classList.toggle('hidden');
 }

@@ -1,11 +1,19 @@
+import { renderRecipeList } from './recipe-cards.js';
 let activeTab = 'all-tab';
 
-async function search(query) {
-    const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
-    const data = await res.json();
-    
-    renderRecipes(data.recipes);
-    renderProfiles(data.users);
+async function search(q) {
+
+    let recipeList = document.getElementById('recipe-search-list');
+    try {
+        const res = await fetch(`/api/search.php?q=${encodeURIComponent(q)}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        renderRecipeList(recipeList, data.recipes);
+        renderProfiles(data.users);
+    } catch (err) {
+        console.error('Search failed:', err);
+        recipeList.textContent = 'Something went wrong. Please try again.';
+    }
 }
 
 function renderProfiles(profiles) {
@@ -18,9 +26,11 @@ function renderProfiles(profiles) {
     }
     
     profiles.forEach(profile => {
-        const profileCard = document.createElement('div');
+        const profileCard = document.createElement('a');
+        profileCard.href = `/user/${profile.username}`;
         profileCard.className = 'profile-card';
         profileCard.innerHTML = `
+            <img src="${profile.image_base ? '/uploads/profile_pictures/' + profile.image_base + '.webp' : '/uploads/profile_pictures/' + profile.username + '_avatar.svg'}" alt="${profile.username}'s avatar" class="profile-avatar">
             <h3>${profile.username}</h3>
             <p>${profile.bio || ''}</p>
         `;
@@ -30,18 +40,12 @@ function renderProfiles(profiles) {
 
 document.addEventListener('DOMContentLoaded', () => {
     const params = new URLSearchParams(window.location.search);
-    const query = params.get('search');
+    const query = params.get('q');
     
     if (query) {
         search(query);
     }
-
-    window.history.replaceState(
-        { type: 'search', slug: query },
-        '',
-        `/results?search=${encodeURIComponent(query)}`
-    );
-
+    
     const allTab = document.getElementById('all-tab');
     const recipesTab = document.getElementById('recipes-tab');
     const profilesTab = document.getElementById('profiles-tab');
