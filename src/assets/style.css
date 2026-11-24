@@ -1,5 +1,5 @@
 @import url('https://fonts.googleapis.com/css2?family=Young+Serif&display=swap');
-@import url("https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&icon_names=add,add_a_photo,add_shopping_cart,bookmark,check_circle,chef_hat,circle,close,cooking,dark_mode,family_group,filter_list,fitness_center,group,light_mode,link,logout,open_in_new,publish,question_mark,receipt_long,search,shuffle,sort,timer,visibility");
+@import url("https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&icon_names=add,add_a_photo,add_shopping_cart,bookmark,call_split,check_circle,chef_hat,circle,close,cooking,dark_mode,family_group,filter_list,fitness_center,fork_chart,group,light_mode,link,logout,open_in_new,publish,question_mark,receipt_long,search,shuffle,sort,timer,visibility");
 
 :root {
     /* Surfaces */
@@ -2012,3 +2012,402 @@ nav {
 #filter-menu .autocomplete-item:hover,
 #filter-menu .autocomplete-item.active { background: rgba(0,0,0,.08); }
 #filter-menu .autocomplete-count { opacity: .6; }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/* redesign.css: load AFTER style.css (or paste at the bottom of it).
+   Uses only your existing theme variables, so light and dark both work. */
+
+:root {
+    --surface: var(--paper);   /* your filter autocomplete referenced this but it was never defined */
+}
+
+/* ---------- Course colours: every recipe gets an identity, even without a photo ---------- */
+
+[data-course="breakfast"] { --course: var(--amber); }
+[data-course="brunch"]    { --course: var(--straw); }
+[data-course="lunch"]     { --course: var(--dill); }
+[data-course="dinner"]    { --course: var(--berry); }
+[data-course="dessert"]   { --course: var(--straw); }
+[data-course="snack"]     { --course: var(--lake); }
+[data-course="sauce"]     { --course: var(--amber); }
+[data-course="drink"]     { --course: var(--lake); }
+
+.placeholder {
+    background-color: color-mix(in srgb, var(--course, var(--amber)) 22%, var(--paper));
+    color: color-mix(in srgb, var(--course, var(--amber)) 70%, var(--ink));
+}
+
+/* ---------- The decider: the one memorable thing on the page ---------- */
+
+.decider {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 2rem clamp(1.5rem, 6vw, 5rem);
+    padding: clamp(2rem, 6vw, 4rem) 0 clamp(1.5rem, 4vw, 2.5rem);
+}
+
+.decider h1 {
+    margin: 0 0 1.5rem;
+    max-width: 13ch;
+    font-family: var(--font-display);
+    font-weight: 400;
+    font-size: clamp(2.3rem, 5.5vw, 3.9rem);
+    line-height: 1.04;
+    letter-spacing: -0.01em;
+    color: var(--ink);
+    text-wrap: balance;
+}
+
+.decider-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.chip {
+    margin: 0;
+    padding: 0.55rem 1rem;
+    border-color: var(--clay);
+    background-color: var(--paper);
+}
+
+.chip[aria-pressed="true"] {
+    background-color: var(--dill);
+    border-color: var(--dill);
+    color: var(--on-dill);
+}
+
+.chip[aria-pressed="true"]::before {
+    content: "✓";
+    font-weight: 700;
+}
+
+.link-button {
+    margin: 1.1rem 0 0;
+    padding: 0.25rem 0;
+    border: 0;
+    border-radius: 0;
+    background: none;
+    color: var(--berry-dark);
+    font-weight: 600;
+    text-decoration: underline;
+    text-underline-offset: 0.25em;
+}
+
+.link-button:hover {
+    background: none;
+    color: var(--berry);
+}
+
+/* A plate: berry centre, rim drawn with inset rings */
+.plate {
+    --size: clamp(9.5rem, 22vw, 13.5rem);
+    width: var(--size);
+    height: var(--size);
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background:
+        radial-gradient(circle, var(--berry) 0 57%, transparent 57.4%),
+        var(--paper);
+    box-shadow:
+        0 0 0 1px var(--clay),
+        inset 0 0 0 0.85rem var(--paper),
+        inset 0 0 0 calc(0.85rem + 1px) var(--sand),
+        var(--shadow-lift);
+    color: var(--on-berry);
+    font-family: var(--font-display);
+    font-weight: 400;
+    font-size: clamp(1.1rem, 2.4vw, 1.5rem);
+    line-height: 1.1;
+    transition: transform 0.25s cubic-bezier(0.3, 0.7, 0.2, 1);
+}
+
+.plate span {
+    display: block;
+    max-width: 5.5rem;
+    text-wrap: balance;
+}
+
+.plate:hover {
+    background-color: var(--paper);
+    border-color: transparent;
+    transform: rotate(-6deg) scale(1.03);
+}
+
+.plate:active {
+    transform: scale(0.97);
+}
+
+.plate.is-deciding {
+    animation: plate-spin 0.7s cubic-bezier(0.3, 0.7, 0.2, 1);
+}
+
+@keyframes plate-spin {
+    to { transform: rotate(1turn); }
+}
+
+/* ---------- The answer ---------- */
+
+.pick {
+    display: grid;
+    grid-template-columns: minmax(0, 15rem) 1fr;
+    gap: 1.5rem;
+    margin-bottom: 2.5rem;
+    padding: 0.75rem;
+    background-color: var(--paper);
+    border-radius: var(--radius-l);
+    box-shadow: var(--shadow-lift);
+    animation: serve 0.45s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+@keyframes serve {
+    from { opacity: 0; transform: scale(0.94) rotate(-1.5deg); }
+}
+
+.pick-image {
+    min-height: 11rem;
+    overflow: hidden;
+    border-radius: 18px;
+}
+
+.pick-image img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    filter: var(--img-filter);
+}
+
+.pick-body {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 0.75rem 1rem 0.75rem 0;
+}
+
+.pick-title {
+    margin: 0 0 0.5rem;
+    font-family: var(--font-display);
+    font-weight: 400;
+    font-size: clamp(1.6rem, 3.5vw, 2.4rem);
+    line-height: 1.1;
+}
+
+.pick-desc {
+    margin: 0 0 1rem;
+    color: var(--umber);
+    max-width: 36rem;
+}
+
+.pick-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-top: 1.25rem;
+}
+
+.pick-actions button {
+    margin: 0;
+}
+
+.pick-cook {
+    background-color: var(--berry);
+    border-color: var(--berry);
+    color: var(--on-berry);
+    box-shadow: var(--shadow-berry);
+}
+
+.pick-cook:hover {
+    background-color: var(--berry-dark);
+    border-color: var(--berry-dark);
+}
+
+/* ---------- Library: calmer navigation under the decider ---------- */
+
+.library-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+}
+
+.recipe-category-buttons.view-switch {
+    width: fit-content;
+    margin: 0;
+    padding: 0.25rem;
+    gap: 0.15rem;
+    background-color: var(--oat-deep);
+    border-radius: var(--radius-pill);
+}
+
+.view-switch .nav-buttons.active {
+    background-color: var(--paper);
+    box-shadow: var(--shadow-chip);
+}
+
+/* Second level reads as a quieter underline tab, so two rows of pills don't compete */
+.sub-category-buttons {
+    justify-content: flex-start;
+    gap: 1.25rem;
+    margin: 1.25rem 0 0.75rem;
+}
+
+.sub-category-buttons .nav-buttons {
+    padding: 0.35rem 0.1rem;
+    border-radius: 0;
+    border-bottom: 2px solid transparent;
+    font-size: 0.95rem;
+}
+
+.sub-category-buttons .nav-buttons:hover {
+    background: none;
+}
+
+.sub-category-buttons .nav-buttons.active {
+    background: none;
+    border-bottom-color: var(--berry);
+}
+
+.empty-state {
+    grid-column: 1 / -1;
+    max-width: 26rem;
+    margin: 2rem auto;
+    text-align: center;
+    color: var(--umber);
+}
+
+.empty-state h3 {
+    font-size: 1.6rem;
+    color: var(--ink);
+}
+
+/* ---------- Dark-mode and theme fixes for hard-coded colours ---------- */
+
+.range-filter {
+    --accent: var(--berry);
+}
+
+.range-slider::before {
+    background: linear-gradient(to right,
+        var(--sand) var(--lo), var(--accent) var(--lo),
+        var(--accent) var(--hi), var(--sand) var(--hi));
+}
+
+.range-slider input[type="range"]::-webkit-slider-thumb,
+.range-slider input[type="range"]::-moz-range-thumb {
+    border-color: var(--paper);
+}
+
+#filter-menu .autocomplete-list {
+    border-color: var(--sand);
+}
+
+#filter-menu .autocomplete-item:hover,
+#filter-menu .autocomplete-item.active {
+    background: var(--oat-deep);
+}
+
+.toast {
+    background: var(--ink);
+    color: var(--paper);
+}
+
+.toast-success {
+    background: var(--dill-dark);
+    color: var(--on-dill);
+}
+
+.toast-error {
+    background: var(--berry-dark);
+    color: var(--on-berry);
+}
+
+.app-dialog {
+    background-color: var(--paper);
+    color: var(--ink);
+    border-radius: var(--radius-l);
+}
+
+.app-dialog::backdrop {
+    background: var(--overlay);
+}
+
+.app-dialog-actions .danger {
+    background: var(--berry-dark);
+    border-color: var(--berry-dark);
+    color: var(--on-berry);
+}
+
+/* ---------- Small screens: the plate becomes a thumb-sized button ---------- */
+
+@media (max-width: 700px) {
+    .decider {
+        grid-template-columns: 1fr;
+        padding-top: 1.5rem;
+    }
+
+    .decider h1 {
+        max-width: none;
+    }
+
+    .plate {
+        width: 100%;
+        height: 3.6rem;
+        border-radius: var(--radius-pill);
+        background: var(--berry);
+        box-shadow: var(--shadow-berry);
+        font-size: 1.25rem;
+    }
+
+    .plate:hover {
+        background-color: var(--berry-dark);
+        transform: none;
+    }
+
+    .plate span {
+        max-width: none;
+    }
+
+    .pick {
+        grid-template-columns: 1fr;
+    }
+
+    .pick-body {
+        padding: 0 0.75rem 0.75rem;
+    }
+
+    .recipe-category-buttons.view-switch {
+        width: 100%;
+        justify-content: space-between;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .plate.is-deciding,
+    .pick {
+        animation: none;
+    }
+}

@@ -13,13 +13,6 @@ export async function init(targetElement) {
 
     const ingredientSuggestions = targetElement.querySelector('.autocomplete-list');
 
-    targetElement.addEventListener('submit', (e) => {
-        if (targetElement.dataset.mode === 'edit') return;
-        console.log("submitting add recipe form");
-        handleAddRecipe(e);
-    })
-    targetElement.hasListener = true;
-
     const add_button = document.querySelector('#add-button');
     
     if (add_button) {

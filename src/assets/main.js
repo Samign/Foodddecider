@@ -42,7 +42,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (dragDrop.init) dragDrop.init(element);
     if (addRecipe.init) addRecipe.init(element);
-    if (forkRecipe.init) forkRecipe.init();
   });
 
   // 3. Recipe Search & Suggestions
@@ -50,6 +49,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // 4. Feed & Grid Features
   loadModuleIfPresent('#recipe-list', () => import('./recipes.js'));
+  loadModuleIfPresent('#recipe-list', () => import('./form-router.js'));
 
   loadModuleIfPresent('#expanded-modal', () => import('./recipe-modal.js'));
   loadModuleIfPresent('#expanded-modal', () => import('./add_to_list.js'));

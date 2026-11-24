@@ -3,6 +3,7 @@ import { escapeHtml, getRecipeImage } from './recipe-cards.js';
 import { fetchRecipeById, parseJson, groupBySection } from './recipe-data.js';
 import { toast } from './toast.js';
 import { confirmDialog } from './dialog.js';
+import { forkRecipe } from './fork-recipe.js';
 
 let overlay, expandedModal, expanded = false;
 
@@ -23,7 +24,7 @@ export function init() {
         } else if (card) {
             const id = parseInt(card.dataset.id);
             if (id) { 
-                pushRecipeState(id); 
+                pushRecipeState(id);
                 expandRecipe(id);
             }
         }
@@ -41,6 +42,10 @@ export function init() {
         if (e.target.classList.contains('ingredient-checkbox')) {
             e.target.classList.toggle('checked');
             e.target.innerHTML = e.target.classList.contains('checked') ? 'check_circle' : 'circle';
+        }
+        if (e.target.id === 'fork-recipe-button') {
+            const recipeId = parseInt(e.target.dataset.id);
+            await forkRecipe(recipeId);
         }
     });
 
@@ -273,6 +278,7 @@ export async function expandRecipe(recipeId) {
     const time           = expandedModal.querySelector('.recipe-time');
     const tags           = expandedModal.querySelector('.recipe-tags');
     const recipeOwner    = expandedModal.querySelector('.recipe-owner');
+    const courseText     = expandedModal.querySelector('.course-type');
     // const servings       = expandedModal.querySelector('.ingredient-servings');
 
     // Render macro wheel first so we get coverage back
@@ -282,6 +288,10 @@ export async function expandRecipe(recipeId) {
     renderIngredients(ingredientsEl, recipe.recipe_ingredients, recipe.recipe_ingredient_sections, coverage);
 
     // servings.textContent = recipe.servings ? `${recipe.servings} servings` : '';
+
+    console.log('courseTypes', window.metadata.courseTypes);
+
+    courseText.textContent = window.metadata.courseTypes.get(recipe.course_types).name;
 
     recipeOwner.innerHTML = `
         <a class="recipe-userinfo" href="/user/${escapeHtml(recipe.owner_username)}">
@@ -330,7 +340,11 @@ export async function expandRecipe(recipeId) {
            </button>
            ${recipe.link ? `<a href="${recipe.link}" target="_blank" class="external-link-button">
                <span class="material-symbols-outlined">open_in_new</span>Open Recipe External Link
-           </a>` : ''}`;
+           </a>` : ''}
+           <button class="recipe-action-button" id="fork-recipe-button" data-id="${id}">
+               <span class="material-symbols-outlined">call_split</span> Fork Recipe
+           </button>
+           `;
 
     expandedModal.classList.remove("hidden");
     overlay.classList.remove('hidden');

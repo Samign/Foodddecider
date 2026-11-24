@@ -6,18 +6,12 @@ export function toggleHidden(evt) {
 
     if (menu.id === "add-menu") {
         const form = document.getElementById("add-recipe-form");
-        if (!form.hasListener) {
-            console.log("Adding submit listener to add-recipe-form");
-            form.addEventListener('submit', handleAddRecipe);
-            form.hasListener = true;
-        }
+        form.dataset.mode = 'add';
     }
     if (menu.id === "add-from-url-modal") {
         const form = document.getElementById("import-url-form");
-        if (!form.hasListener) {
-            form.addEventListener('submit', handleAddFromUrl);
-            form.hasListener = true;
-        }
+        form.addEventListener('submit', handleAddFromUrl);
+        form.hasListener = true;
     }
 }
 

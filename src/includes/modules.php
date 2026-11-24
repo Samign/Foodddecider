@@ -18,7 +18,6 @@ function getUser()
 function getNavBar($navButtons = false)
 {
     $user = getUser();
-    $userLoggedIn = isset($_SESSION['user_id']);
 
     ?>
     <nav>
@@ -26,9 +25,9 @@ function getNavBar($navButtons = false)
 
         <?php if ($navButtons): ?>
             <div class="recipe-category-buttons">
-                <button class="nav-buttons <?php echo $userLoggedIn ? 'active' : ''; ?>" id="personal-recipes">My Collection</button>
+                <button class="nav-buttons <?php echo $user ? 'active' : ''; ?>" id="personal-recipes">My Collection</button>
                 <button class="nav-buttons" id="friends-recipes">Following</button>
-                <button class="nav-buttons <?php echo $userLoggedIn ? '' : 'active'; ?>" id="public-recipes">Discover</button>
+                <button class="nav-buttons <?php echo $user ? '' : 'active'; ?>" id="public-recipes">Discover</button>
             </div>
         <?php endif; ?>
         <!-- Search bar -->
@@ -58,7 +57,8 @@ function getNavBar($navButtons = false)
             <?php endif; ?>
         </div>
     </nav>
-
+    
+    <?php if ($user): ?>
     <div class="modal hidden" id="social-modal">
         <div>
             <span class="close-button">&times;</span>
@@ -123,7 +123,9 @@ function getNavBar($navButtons = false)
             </div>
         </div>
     </div>
+    
     <?php
+    endif;
 }
 
 function getExpandedModal()
@@ -135,7 +137,13 @@ function getExpandedModal()
             <div class="left-side-expanded">
                 <div class="expanded-recipe-image"></div>
                 <div class="recipe-tags"></div>
-                <div class="views"></div>
+                <div>
+                    <div class="views"></div>
+                    <div class="course">
+                        <span class="material-symbols-outlined">fork_chart</span>
+                        <span class="course-type">Dinner</span>
+                    </div>
+                </div>
                 <div class="ingredients">
                     <div class="flex">
                         <h4>THE INGREDIENTS</h4>

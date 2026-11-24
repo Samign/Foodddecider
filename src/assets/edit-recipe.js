@@ -5,18 +5,7 @@ import { toast } from './toast.js';
 
 let addForm = null;
 
-function ensureListener() {
-    addForm = document.getElementById('add-recipe-form');
-    if (addForm.dataset.editBound) return;
-    addForm.dataset.editBound = '1';
-    addForm.addEventListener('submit', (e) => {
-        if (addForm.dataset.mode !== 'edit') return;
-        submitEdit(e);
-    });
-}
-
 export async function handleEdit(recipeId) {
-    ensureListener();
     addForm.dataset.mode = 'edit';
     addForm.dataset.recipeId = recipeId;
     await grabAndDisplayEdit(recipeId);
@@ -39,6 +28,8 @@ export async function grabAndDisplayEdit(recipeId) {
  
     const prep  = Number(recipe.prep_time_minutes) || 0;
     const total = Number(recipe.total_time_minutes) || 0;
+
+    addForm = document.getElementById('add-recipe-form');
  
     addForm.dataset.id = recipeId;
     addForm.id = "edit-recipe-form";
@@ -81,7 +72,7 @@ export async function grabAndDisplayEdit(recipeId) {
     document.getElementById('add-menu').classList.toggle("hidden");
 }
 
-async function submitEdit(e) {
+export async function submitEdit(e) {
     e.preventDefault();
     const form      = e.target;
     const recipeId  = parseInt(form.dataset.id);
