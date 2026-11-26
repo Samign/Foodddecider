@@ -13,6 +13,8 @@ export async function init(targetElement) {
 
     const ingredientSuggestions = targetElement.querySelector('.autocomplete-list');
 
+    initTimeToggle(targetElement);
+
     const add_button = document.querySelector('#add-button');
     
     if (add_button) {
@@ -283,6 +285,52 @@ export async function init(targetElement) {
         });
     }
 };
+
+// ── Time: "Total time" by default, with a switch to split it into prep and cook ──
+// Total-only sends the total as `cook` and leaves `prep` empty (stored as NULL).
+
+function initTimeToggle(form) {
+    const toggle = form.querySelector('#split-time');
+    const prep = form.querySelector('#prep');
+    const cook = form.querySelector('#cook');
+    if (!toggle || !prep || !cook) return;
+
+    toggle.addEventListener('change', () => {
+        // Back to one field: fold prep into the total so nothing is lost
+        if (!toggle.checked) {
+            cook.value = minutes(prep) + minutes(cook) || '';
+            prep.value = '';
+        }
+        renderTimeFields(form);
+    });
+    prep.addEventListener('input', () => renderTimeFields(form));
+    cook.addEventListener('input', () => renderTimeFields(form));
+    form.addEventListener('reset', () => setTimeout(() => renderTimeFields(form), 0));
+
+    renderTimeFields(form);
+}
+
+const minutes = input => Number(input.value) || 0;
+
+function renderTimeFields(form) {
+    const split = form.querySelector('#split-time').checked;
+    const prep = form.querySelector('#prep');
+    const cook = form.querySelector('#cook');
+    form.querySelector('#prep-wrap').hidden = !split;
+    form.querySelector('#cook-label').textContent = split ? 'Cook time' : 'Total time';
+    form.querySelector('#time-sum').textContent = split && (prep.value || cook.value)
+        ? `= ${minutes(prep) + minutes(cook)} min in total`
+        : '';
+}
+
+/** Used by edit-recipe.js: a saved prep time opens the form already split. */
+export function setRecipeTimes(form, prepMinutes, cookMinutes) {
+    const hasPrep = Number(prepMinutes) > 0;
+    form.querySelector('#split-time').checked = hasPrep;
+    form.querySelector('#prep').value = hasPrep ? prepMinutes : '';
+    form.querySelector('#cook').value = cookMinutes ?? '';
+    renderTimeFields(form);
+}
 
 export async function handleAddRecipe(e) {
     e.preventDefault();

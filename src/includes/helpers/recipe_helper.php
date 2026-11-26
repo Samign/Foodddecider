@@ -14,6 +14,12 @@ function extractSourceKey(string $url): ?string {
         : '';
 }
 
+/** "" or junk -> null, otherwise a whole number (never negative). Used for minutes and servings. */
+function wholeNumberOrNull($value): ?int {
+    if ($value === null || trim((string)$value) === '' || !is_numeric($value)) return null;
+    return max(0, (int)$value);
+}
+
 function fetchRecipeInput() {
     return [
         'name' => $_POST['name'] ?? '',
@@ -21,10 +27,11 @@ function fetchRecipeInput() {
         'link' => $_POST['link'] ?? '',
         'public' => $_POST['public'] ?? '0',
         'course' => $_POST['course'] ?? '4',
-        'prep' => $_POST['prep'] ?? '10',
-        'cook' => $_POST['cook'] ?? '30',
+        // Prep is optional: the form sends only a total (as `cook`) unless "Split into prep and cook" is on
+        'prep' => wholeNumberOrNull($_POST['prep'] ?? null),
+        'cook' => wholeNumberOrNull($_POST['cook'] ?? null),
         'picture' => $_FILES['picture'] ?? null,
-        'servings' => $_POST['servings'] ?? null,
+        'servings' => wholeNumberOrNull($_POST['servings'] ?? null),   // empty field would break the INT column
         'steps' => $_POST['step_sections'] ?? [],
         'ingredients' => $_POST['ingredient_sections'] ?? [],
         'tags' => $_POST['tags'] ?? [],

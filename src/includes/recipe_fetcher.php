@@ -169,7 +169,8 @@ function getRecipeCards(array $opts = []): array {
         'time'               => null,
         'include_cook_time'  => null,
         'public'             => '0',
-        'category'           => null,   // favorites | saved | following
+        'category'           => null,   // favorites | saved | following | all
+        'exclude_id'         => null,   // skip one recipe (random: "Another one")
         'order_by'           => null,
         'search_query'       => null,
         'limit'              => 20,
@@ -229,6 +230,9 @@ function getRecipeCards(array $opts = []): array {
         $where[] = "EXISTS (SELECT 1 FROM saved_recipes sv WHERE sv.recipe_id = r.id AND sv.user_id = :owner_id)";
     } elseif ($category === 'following') {
         $where[] = "r.owner_id IN (SELECT followed_id FROM followers WHERE follower_id = :owner_id)";
+    } elseif ($category === 'all') {
+        // "All": your own recipes plus everything public
+        $where[] = "(r.owner_id = :owner_id OR r.is_public = '1')";
     } elseif (!$public || $ownerExplicit) {
         $where[] = "r.owner_id = :owner_id";
     }
@@ -288,6 +292,15 @@ function getRecipeCards(array $opts = []): array {
             $params[":ing_$i"] = addcslashes($ing, '%_\\');   // user input is literal, not a wildcard
         }
         $where[] = '(' . implode($opts['ingredients_match'] === 'any' ? ' OR ' : ' AND ', $parts) . ')';
+
+        // "I have": how many of the chosen ingredients each recipe uses, and how many it needs in total
+        $matchSql = implode(' + ', array_map(fn($p) => "($p)::int", $parts));
+        $totalSql = "(SELECT COUNT(*) FROM recipe_ingredients ri WHERE ri.recipe_id = r.id)";
+    }
+
+    if (is_numeric($opts['exclude_id'] ?? null)) {
+        $where[] = "r.id <> :exclude_id";
+        $params[':exclude_id'] = (int)$opts['exclude_id'];
     }
 
     // Tags: matched by slug, recipe must have every selected tag
@@ -357,10 +370,15 @@ function getRecipeCards(array $opts = []): array {
         'oldest'        => 'r.created_at ASC',
     ];
 
+    // With "I have" ingredients and no explicit sort: most matched first, then the recipes you're closest to completing
+    $defaultOrder = isset($matchSql)
+        ? "($matchSql) DESC, ($matchSql)::float / NULLIF($totalSql, 0) DESC, r.title ASC"
+        : 'search_rank DESC, r.title ASC';
+
     $isRandom = ($opts['action'] === 'random');
     $orderSql = $isRandom
         ? 'RANDOM()'
-        : ($orderMap[$orderBy] ?? 'search_rank DESC, r.title ASC') . ', r.id';
+        : ($orderMap[$orderBy] ?? $defaultOrder) . ', r.id';
     
     // Optional joins: only pay for them when the sort needs them
     $joins       = '';
@@ -433,6 +451,7 @@ function getRecipeCards(array $opts = []): array {
             u.image_base AS owner_image,
             COALESCE(tags.recipe_tags, '[]'::json) AS recipe_tags,
             $macroSelect
+            " . (isset($matchSql) ? "($matchSql) AS ingredient_matches, $totalSql AS ingredient_total," : '') . "
             $rankSql AS search_rank
 
         FROM recipes r

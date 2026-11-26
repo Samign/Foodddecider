@@ -11,6 +11,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     initTags();
     initListners();
     await loadTags();
+    window.metadata.loaded = true;   // modules imported later check this instead of waiting for the event
     document.dispatchEvent(new Event("tagsLoaded"));
 });
 

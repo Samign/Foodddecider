@@ -2,7 +2,6 @@
 require_once __DIR__ . '/../../includes/require_login.php';
 require_once __DIR__ . '/../../includes/db.php';
 require_once __DIR__ . '/../../includes/upload_image.php';
-require_once __DIR__ . '/../../includes/match_ingredient.php';
 require_once __DIR__ . '/../../includes/helpers/recipe_helper.php';
 
 $recipe_id = filter_var($_GET['id'] ?? null, FILTER_VALIDATE_INT);

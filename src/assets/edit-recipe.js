@@ -2,10 +2,12 @@ import { fillEditList } from './sections.js';
 import { parseJson, fetchRecipeById } from './recipe-data.js'
 import { showLoadedpreview } from './drag-and-drop.js';
 import { toast } from './toast.js';
+import { setRecipeTimes } from './add-recipe.js';
 
 let addForm = null;
 
 export async function handleEdit(recipeId) {
+    addForm = document.getElementById('add-recipe-form');   // was still null on the first edit
     addForm.dataset.mode = 'edit';
     addForm.dataset.recipeId = recipeId;
     await grabAndDisplayEdit(recipeId);
@@ -31,14 +33,13 @@ export async function grabAndDisplayEdit(recipeId) {
 
     addForm = document.getElementById('add-recipe-form');
  
+    // Keep the form's id: recipe-data.js, form-router.js and add-recipe.js all look it up by #add-recipe-form
     addForm.dataset.id = recipeId;
-    addForm.id = "edit-recipe-form";
-    addForm.querySelector('legend').textContent        = 'Edit Recipe';
-    addForm.querySelector('.save-recipe-button').value = 'Update Recipe';
+    addForm.querySelector('.form-title').textContent         = 'Edit recipe';
+    addForm.querySelector('.save-recipe-button').textContent = 'Update recipe';
     addForm.querySelector('#name').value               = recipe.title ?? '';
     addForm.querySelector('#description').value        = recipe.description ?? '';
-    addForm.querySelector('#prep').value               = recipe.prep_time_minutes ?? '';
-    addForm.querySelector('#cook').value               = Math.max(0, total - prep);
+    setRecipeTimes(addForm, recipe.prep_time_minutes, Math.max(0, total - prep));
     addForm.querySelector('#servings').value           = recipe.servings ?? '';
     addForm.querySelector('#link').value               = recipe.link ?? '';
  
@@ -76,6 +77,7 @@ export async function submitEdit(e) {
     e.preventDefault();
     const form      = e.target;
     const recipeId  = parseInt(form.dataset.id);
+    const formData  = new FormData(form);
 
     try {
         const response = await fetch(`/api/recipes/update_recipe.php?id=${recipeId}`, {

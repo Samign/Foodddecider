@@ -306,12 +306,14 @@ export async function expandRecipe(recipeId) {
 
     tags.innerHTML = recipe.recipe_tags ? JSON.parse(recipe.recipe_tags).map(t => `<a href="/results?q=${encodeURIComponent(t.name)}" class="pill">${t.name}</a>`).join('') : '';
 
+    // Prep is optional (see the "Split into prep and cook" switch): only show it when it was given
+    const hasPrep = recipe.prep_time_minutes != null && Number(recipe.prep_time_minutes) > 0;
     time.innerHTML = `
-        <div class="recipe-time-section">
+        ${hasPrep ? `<div class="recipe-time-section">
             <h5>PREP TIME</h5>
             <span>${recipe.prep_time_minutes} Mins</span>
         </div>
-        <span class="divider"></span>
+        <span class="divider"></span>` : ''}
         <div class="recipe-time-section">
             <h5>TOTAL TIME</h5>
             <span>${recipe.total_time_minutes} Mins</span>

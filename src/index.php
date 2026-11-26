@@ -25,11 +25,7 @@ if (preg_match('/\/recipe\/(\d+)/', $requestUri, $matches)) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <script>try{var t=localStorage.getItem('theme');if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com/" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Epilogue:ital,wght@0,100..900;1,100..900&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/assets/style.css">
+    <?php getHeadAssets(); ?>
     <?php if ($recipe): ?>
         <title><?php echo htmlspecialchars($recipe['title']); ?></title>
         <meta property="og:title" content="<?php echo htmlspecialchars($recipe['title']); ?>">
@@ -41,9 +37,9 @@ if (preg_match('/\/recipe\/(\d+)/', $requestUri, $matches)) {
 </head>
 <body>
     <div class="modal-overlay hidden" id="modal-overlay"></div>
-    <?php echo getNavBar(true); ?>
-    <?php echo getExpandedModal(); ?>
-    <?php echo getFilterMenu(); ?>
+    <?php getNavBar(); ?>
+    <?php getExpandedModal(); ?>
+    <?php getFilterMenu(); ?>
 
     <?php if ($recipe): ?>
         <noscript>
@@ -56,6 +52,10 @@ if (preg_match('/\/recipe\/(\d+)/', $requestUri, $matches)) {
     <?php endif; ?>
         
     <div class="recipes-container" id="recipes">
+        <?php getDecider(); ?>
+        <section class="results" aria-labelledby="count">
+        <?php getLibraryBar(); ?>
+
         <div class="sub-category-buttons"></div>
         <div class="button-container">
             <div>
@@ -89,12 +89,12 @@ if (preg_match('/\/recipe\/(\d+)/', $requestUri, $matches)) {
                         </optgroup>
                     </select>
                 </label>
-                <button id="filter-button"><span class="material-symbols-outlined">filter_list</span>Filters</button>
-                <button class="random-button" id="random-button"><span class="material-symbols-outlined">shuffle</span>Surprise Me</button>
             </div>
-            <button class="add-button" id="add-button"><span class="material-symbols-outlined">add</span>Add new recipe</button>
         </div>
         <div class="recipe-card-container" id="recipe-list"></div>
+        </section>
+
+        <?php getEmptyStateTemplate(); ?>
     </div>
 
     <?php if(!$userLoggedIn) {

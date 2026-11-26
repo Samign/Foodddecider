@@ -5,7 +5,9 @@ require_once __DIR__ . '/includes/modules.php';
 <html>
 <head>
     <title>FoodDecider - Search Results</title>
-    <link rel="stylesheet" href="./assets/style.css">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <?php getHeadAssets(); ?>
 </head>
 <body>
     <?php echo getExpandedModal(); ?>

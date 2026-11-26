@@ -7,6 +7,8 @@ export function toggleHidden(evt) {
     if (menu.id === "add-menu") {
         const form = document.getElementById("add-recipe-form");
         form.dataset.mode = 'add';
+        form.querySelector('.form-title').textContent = 'Add a recipe';
+        form.querySelector('.save-recipe-button').textContent = 'Save recipe';
     }
     if (menu.id === "add-from-url-modal") {
         const form = document.getElementById("import-url-form");

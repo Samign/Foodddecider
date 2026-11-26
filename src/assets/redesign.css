@@ -1,0 +1,641 @@
+/* assets/redesign.css
+ *
+ * The new look. Loaded after style.css by getHeadAssets() in includes/modules.php.
+ * style.css still styles everything this file doesn't touch (groups, shopping list,
+ * login, filter modal, toasts, dialogs), and its variables are pointed at the new
+ * palette below so those parts match.
+ */
+
+/* ---------- Tokens ---------- */
+
+:root {
+    --bg: #FBF8F3;          /* page */
+    --card: #FFFFFF;        /* cards, header, modals */
+    --well: #F4EEE3;        /* inputs, panels behind cards */
+    --line: #E9E0D2;        /* hairlines */
+    --ink: #2B211C;
+    --mute: #7A6B60;
+    --berry: #DE6A50;       /* primary action: Decide, Cook this */
+    --berry-d: #B5472F;
+    --berry-t: #FBE6DF;
+    --dill: #4F7A66;        /* selected chips, labels */
+    --dill-t: #E3EFE9;
+    --amber: #E3A23B;
+    --straw: #F3D590;
+    --lake: #5E7C96;
+    --onb: #fff;            /* text on berry */
+    --ond: #fff;            /* text on dill */
+    --sh: 0 1px 2px rgba(86, 52, 28, .06), 0 10px 28px rgba(86, 52, 28, .1);
+    --serif: "Fraunces", Georgia, serif;
+    --sans: "Figtree", system-ui, -apple-system, "Segoe UI", sans-serif;
+
+    /* style.css names, so the untouched parts (modals, lists, groups) use the new palette */
+    --oat: var(--bg);
+    --oat-deep: var(--well);
+    --paper: var(--card);
+    --sand: var(--line);
+    --umber: var(--mute);
+    --berry-dark: var(--berry-d);
+    --berry-tint: var(--berry-t);
+    --dill-tint: var(--dill-t);
+    --surface: var(--card);
+    --font-display: var(--serif);
+}
+
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+        --bg: #1D1815; --card: #2A2320; --well: #352C27; --line: #3D332D;
+        --ink: #F1E6D8; --mute: #B5A495;
+        --berry: #E8826B; --berry-d: #F2A592; --berry-t: #432627;
+        --dill: #8DBBA4; --dill-t: #263630;
+        --amber: #E8AE4A; --straw: #C9A24E; --lake: #8FB0CB;
+        --onb: #2A1514; --ond: #12211B;
+        --sh: 0 1px 2px rgba(0, 0, 0, .35), 0 10px 28px rgba(0, 0, 0, .3);
+    }
+}
+
+:root[data-theme="dark"] {
+    --bg: #1D1815; --card: #2A2320; --well: #352C27; --line: #3D332D;
+    --ink: #F1E6D8; --mute: #B5A495;
+    --berry: #E8826B; --berry-d: #F2A592; --berry-t: #432627;
+    --dill: #8DBBA4; --dill-t: #263630;
+    --amber: #E8AE4A; --straw: #C9A24E; --lake: #8FB0CB;
+    --onb: #2A1514; --ond: #12211B;
+    --sh: 0 1px 2px rgba(0, 0, 0, .35), 0 10px 28px rgba(0, 0, 0, .3);
+}
+
+/* ---------- Base ---------- */
+
+html { background: var(--bg); }
+
+body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+}
+
+h1, h2, h3,
+.modal h2,
+.recipe-title {
+    font-family: var(--serif);
+    font-weight: 700;
+    line-height: 1.1;
+    letter-spacing: -.01em;
+}
+
+[hidden] { display: none !important; }
+
+/* style.css gives every <button> a margin and a beige hover. The new controls opt out. */
+.chip, .seg .nav-buttons, .btn, .tbtn, .add, .plate { margin: 0; }
+
+.btn {
+    border: 1px solid var(--line);
+    background: var(--card);
+    color: var(--ink);
+    border-radius: 99px;
+    padding: .6rem 1.2rem;
+    font-weight: 500;
+}
+.btn:hover { background: var(--well); }
+.btn.p { background: var(--berry); border-color: var(--berry); color: var(--onb); box-shadow: none; }
+.btn.p:hover { background: var(--berry-d); border-color: var(--berry-d); }
+
+/* ---------- Header ---------- */
+
+.top {
+    position: sticky;
+    top: 0;
+    z-index: 900;
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: .7rem clamp(1rem, 3vw, 2rem);
+    background: var(--card);
+    border-bottom: 1px solid var(--line);
+}
+
+.logo {
+    display: flex;
+    flex-direction: column;
+    flex: none;
+    color: var(--ink);
+    text-decoration: none;
+    font: 800 1.7rem/1 var(--serif);
+    letter-spacing: -.02em;
+}
+.logo small {
+    margin-top: .3rem;
+    font: 600 .58rem/1 var(--sans);
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--mute);
+}
+
+.sbox {
+    position: relative;
+    flex: 0 1 24rem;
+    margin: 0 auto 0 .5rem;
+}
+.top .search {
+    width: 100%;
+    margin: 0;
+    padding: .55rem 3.4rem .55rem 1rem;
+    border: 1px solid var(--line);
+    border-radius: 99px;
+    background: var(--bg);
+}
+.top .search:focus { border-color: var(--berry); background: var(--card); }
+.sbox kbd {
+    position: absolute;
+    right: .9rem;
+    top: 50%;
+    transform: translateY(-50%);
+    padding: .15rem .45rem;
+    border-radius: 6px;
+    background: var(--well);
+    color: var(--mute);
+    font: 600 .7rem var(--sans);
+}
+
+.tbtn,
+.top .shopping-list-button,
+.top .social-tab {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: .3rem;
+    width: auto;
+    height: auto;
+    padding: .5rem .8rem;
+    border: 0;
+    border-radius: 99px;
+    background: none;
+    color: var(--mute);
+    font-weight: 500;
+    white-space: nowrap;
+}
+.tbtn:hover { background: var(--well); color: var(--ink); border-color: transparent; }
+.tbtn.pill { border: 1px solid var(--line); background: var(--card); color: var(--ink); }
+.tbtn.pill:hover { border-color: var(--line); }
+
+.top .badge { position: static; margin-left: .2rem; }
+
+.vr { width: 1px; height: 1.6rem; background: var(--line); }
+
+.add,
+.top #log-in {
+    flex: none;
+    padding: .6rem 1.1rem;
+    border: 0;
+    border-radius: 99px;
+    background: var(--ink);
+    color: var(--card);
+    font-weight: 600;
+    box-shadow: none;
+    white-space: nowrap;
+}
+.add:hover,
+.top #log-in:hover { background: var(--ink); opacity: .88; }
+
+.top .current-user { flex: none; }
+.top .profile-picture { width: 2.3rem; height: 2.3rem; }
+
+/* ---------- Hero: headline, decide card, quick filters ---------- */
+
+.hero {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    grid-template-areas: "head decide" "filters filters";
+    align-items: center;
+    gap: 1.5rem 3rem;
+    padding: clamp(1.5rem, 5vw, 3.5rem) 0 1rem;
+}
+.hero > div:first-child { grid-area: head; }
+.hero > .decide { grid-area: decide; }
+.hero > .panel { grid-area: filters; }
+
+.hero h1 {
+    margin: 0;
+    font-size: clamp(2.4rem, 5.5vw, 4rem);
+    font-weight: 800;
+    letter-spacing: -.02em;
+    max-width: 14ch;
+    text-wrap: balance;
+}
+.hero > div:first-child > p { margin: .8rem 0 0; color: var(--mute); font-size: 1.1rem; }
+
+.decide {
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+    padding: 1.2rem 1.5rem;
+    background: var(--card);
+    border-radius: 24px;
+    box-shadow: var(--sh);
+}
+.decide b {
+    display: block;
+    font-size: .72rem;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--dill);
+}
+.decide p { margin: .3rem 0 0; max-width: 11rem; }
+
+/* Decide for me: a physical push button. A solid darker edge underneath, no glow,
+   no movement on hover, and it presses down into its edge when clicked. */
+.plate {
+    --edge: color-mix(in srgb, var(--berry) 72%, #000);
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 7.2rem;
+    height: 7.2rem;
+    margin-bottom: 6px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: var(--berry);
+    color: var(--onb);
+    font: 700 1.15rem/1.1 var(--serif);
+    text-align: center;
+    box-shadow: 0 6px 0 var(--edge);
+    transition: transform .07s ease-out, box-shadow .07s ease-out, background-color .15s;
+}
+.plate span { max-width: 5rem; }
+.plate:hover { background-color: color-mix(in srgb, var(--berry) 92%, #000); border-color: transparent; }
+.plate:active { transform: translateY(5px); box-shadow: 0 1px 0 var(--edge); }
+
+.row {
+    display: grid;
+    grid-template-columns: 6.5rem 1fr;
+    gap: .5rem 1rem;
+    align-items: start;
+    padding: .85rem 0;
+    border-top: 1px solid var(--line);
+}
+.row:first-child { border-top: 0; }
+.row > b { padding-top: .4rem; font-size: .9rem; font-weight: 600; color: var(--mute); }
+
+.chips { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; }
+
+.chip {
+    padding: .4rem .9rem;
+    border: 1px solid var(--line);
+    border-radius: 99px;
+    background: var(--card);
+    color: var(--ink);
+    font-size: .93rem;
+    font-weight: 500;
+    transition: border-color .15s, background-color .15s;
+}
+.chip:hover { border-color: var(--dill); background: var(--card); }
+.chip[aria-pressed="true"],
+.chip[aria-pressed="true"]:hover { background: var(--dill); border-color: var(--dill); color: var(--ond); }
+.chip[aria-pressed="true"]::before { content: "✓ "; }
+.chip.more { border-style: dashed; color: var(--mute); }
+.chip small { margin-left: .2rem; opacity: .65; }
+
+/* My kitchen / Following / Discover (recipes.js toggles .active) */
+.seg.recipe-category-buttons {
+    display: inline-flex;
+    order: 0;             /* style.css moves .recipe-category-buttons around below 900px */
+    width: auto;
+    justify-content: flex-start;
+    gap: 0;
+    max-width: 100%;
+    margin: 0;
+    padding: .2rem;
+    overflow-x: auto;
+    background: var(--well);
+    border-radius: 99px;
+    scrollbar-width: none;
+}
+.seg .nav-buttons {
+    padding: .35rem .9rem;
+    border: 0;
+    border-radius: 99px;
+    background: none;
+    color: var(--mute);
+    font-weight: 500;
+    white-space: nowrap;
+}
+.seg .nav-buttons:hover { background: none; color: var(--ink); }
+.seg .nav-buttons.active {
+    background: var(--card);
+    color: var(--berry-d) !important;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, .18);
+}
+
+.hint { flex-basis: 100%; margin: .2rem 0 0; font-size: .92rem; color: var(--mute); }
+.hint.d {
+    padding: .55rem .9rem;
+    border-radius: 12px;
+    background: var(--berry-t);
+    color: var(--berry-d);
+    font-weight: 500;
+}
+
+#ing-all { margin-top: .5rem; }
+
+.ing-search { position: relative; max-width: 22rem; margin-top: .6rem; }
+.ing-search .in-t { margin: 0; }
+.ing-search .autocomplete-list {
+    position: absolute;
+    left: 0;
+    right: 0;
+    z-index: 20;
+    max-height: 14rem;
+    overflow: auto;
+}
+.autocomplete-item.active { background: var(--well); }
+
+.pop {
+    grid-column: 2;
+    padding: .8rem;
+    background: var(--well);
+    border-radius: 16px;
+}
+.pop input {
+    margin: 0 0 .7rem;
+    padding: .5rem .9rem;
+    border: 1px solid var(--line);
+    border-radius: 99px;
+    background: var(--card);
+}
+
+/* Shared text input in the new forms */
+.in-t {
+    width: 100%;
+    margin: 0;
+    padding: .7rem 1rem;
+    border: 1px solid transparent;
+    border-radius: 12px;
+    background: var(--well);
+}
+.in-t:focus { outline: none; border-color: var(--berry); background: var(--card); }
+
+/* ---------- Decide answer ---------- */
+
+#pick:not([hidden]) {
+    margin-top: 1.5rem;
+    padding: 1.2rem;
+    background: var(--well);
+    border-radius: 28px;
+}
+
+.pick {
+    display: grid;
+    grid-template-columns: minmax(0, 15rem) 1fr;
+    gap: 1.5rem;
+    padding: .7rem;
+    background: var(--card);
+    border-radius: 22px;
+    box-shadow: var(--sh);
+    animation: serve .35s cubic-bezier(.2, .8, .2, 1);
+}
+@keyframes serve { from { opacity: 0; transform: scale(.97); } }
+
+.pick-image { min-height: 11rem; overflow: hidden; border-radius: 16px; }
+.pick-image img { display: block; width: 100%; height: 100%; object-fit: cover; filter: var(--img-filter); }
+
+.pick .in { display: flex; flex-direction: column; justify-content: center; gap: .7rem; padding: .8rem 1rem .8rem 0; }
+.pick h2 { margin: 0; font-size: clamp(1.7rem, 3.5vw, 2.4rem); }
+.pk {
+    align-self: flex-start;
+    padding: .2rem .7rem;
+    border-radius: 99px;
+    background: var(--dill-t);
+    color: var(--dill);
+    font-size: .7rem;
+    font-weight: 600;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+}
+.meta { display: flex; flex-wrap: wrap; gap: .35rem; margin: 0; }
+.meta span { padding: .15rem .65rem; border-radius: 99px; background: var(--bg); font-size: .8rem; color: var(--mute); }
+.meta span:first-child { color: var(--berry-d); font-weight: 600; }
+.pick-desc { margin: 0; color: var(--mute); }
+.pick .act { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .3rem; }
+
+/* ---------- Results ---------- */
+
+.results {
+    margin-top: 2rem;
+    padding: 1.4rem;
+    background: var(--well);
+    border-radius: 28px;
+}
+
+.bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: .5rem 1rem;
+    margin: 0 0 1rem;
+}
+.bar h2 { margin: 0; font-size: 1.7rem; }
+.sub { font-size: .9rem; color: var(--mute); }
+
+.results .sub-category-buttons { justify-content: flex-start; gap: 1.25rem; margin: 0 0 .5rem; }
+.results .sub-category-buttons .nav-buttons {
+    padding: .35rem .1rem;
+    border: 0;
+    border-bottom: 2px solid transparent;
+    border-radius: 0;
+    background: none;
+}
+.results .sub-category-buttons .nav-buttons.active { background: none; border-bottom-color: var(--berry); }
+.results .button-container { margin-bottom: 1rem; }
+.sort-control select { width: auto; background-color: var(--card); }
+
+/* Recipe cards (assets/recipe-cards.js) */
+.recipe-card-container { margin-top: 0; grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr)); gap: 1.25rem; }
+
+.recipe-card {
+    padding: 0;
+    overflow: hidden;
+    border-radius: 20px;
+    background: var(--card);
+    box-shadow: var(--sh);
+}
+.recipe-image-container { height: 11rem; border-radius: 0; }
+.owner-image { top: 9.5rem; right: 1rem; width: 2.6rem; height: 2.6rem; }
+.recipe-content { padding: 1rem 1.2rem 1.2rem; }
+.recipe-content h3 { margin: 0 0 .6rem; padding-right: 2.5rem; font-size: 1.3rem; }
+.recipe-card .saves { top: .8rem; right: .8rem; }
+
+.card-meta {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: .45rem;
+    font-size: .8rem;
+    color: var(--mute);
+}
+.card-have { margin: 0 0 .5rem; font-size: .85rem; font-weight: 600; color: var(--dill); }
+.card-tags { display: flex; flex-wrap: wrap; gap: .3rem; }
+.card-tags span {
+    padding: .1rem .6rem;
+    border-radius: 99px;
+    background: var(--well);
+    color: var(--mute);
+    font-size: .78rem;
+}
+
+/* No photo: a soft colour per meal type instead of the same grey hat */
+[data-course] { --cc: var(--amber); }
+[data-course="lunch"], [data-course="brunch"] { --cc: var(--dill); }
+[data-course="dinner"] { --cc: var(--berry); }
+[data-course="dessert"] { --cc: var(--straw); }
+[data-course="snack"], [data-course="drink"] { --cc: var(--lake); }
+[data-course] .placeholder {
+    background: color-mix(in srgb, var(--cc) 22%, var(--card));
+    color: color-mix(in srgb, var(--cc) 70%, var(--ink));
+}
+
+.empty { grid-column: 1 / -1; padding: 2.5rem 1rem; text-align: center; color: var(--mute); }
+.empty h3 { margin: 0 0 .5rem; font-size: 1.5rem; color: var(--ink); }
+
+/* ---------- Recipe view: ingredients stay put while the steps scroll ---------- */
+
+#expanded-modal,
+#add-menu { width: min(94vw, 62rem); overflow-y: auto; }
+
+.dlg { padding: 1.5rem clamp(1rem, 3vw, 2rem) 2rem; }
+#expanded-modal .rv { padding-top: 2.5rem; }
+
+.rvh { display: grid; grid-template-columns: 16rem 1fr; gap: 1.5rem 2rem; align-items: start; }
+.rvh .recipe-title { margin-top: .6rem; }
+.expanded-recipe-image { transform: none; }
+
+.rvb { display: grid; grid-template-columns: 21rem 1fr; gap: 2rem; align-items: start; margin-top: 1.5rem; }
+.rvb aside.ingredients {
+    position: sticky;
+    top: .75rem;
+    max-height: calc(90vh - 2rem);
+    margin: 0;
+    padding: 1.1rem 1.3rem;
+    overflow: auto;
+    background: var(--bg);
+    border-radius: 18px;
+}
+.rvb aside .flex { justify-content: space-between; }
+.rvb h3 { margin: 0 0 .6rem; font-size: 1.3rem; }
+.ingredient-list { max-height: none; }
+
+/* ---------- Add / edit recipe ---------- */
+
+.fm { display: grid; gap: 1.4rem; }
+.fm .form-title { margin: 0; font-size: 1.8rem; }
+.fm label.l,
+.fm legend {
+    display: block;
+    margin-bottom: .4rem;
+    padding: 0;
+    font: 600 .9rem var(--sans);
+    color: var(--mute);
+}
+.fm fieldset { margin: 0; padding: 0; border: 0; }
+
+.top2 { display: grid; grid-template-columns: 12rem 1fr; gap: 1.2rem; }
+.top2 .upload-box { width: 100%; }
+
+.tbox { display: grid; gap: .8rem; padding: 1rem; background: var(--bg); border-radius: 16px; }
+.tin { display: flex; flex-wrap: wrap; align-items: end; gap: .8rem; }
+.tin label { display: block; font-size: .8rem; color: var(--mute); }
+.tin input { width: 6rem; padding: .6rem .8rem; border: 1px solid var(--line); border-radius: 12px; background: var(--card); }
+.tin .u { padding-bottom: .6rem; color: var(--mute); }
+
+/* On/off switch */
+.sw { display: flex; align-items: center; gap: .7rem; color: var(--ink); font-size: .95rem; cursor: pointer; }
+.sw input[type="checkbox"] {   /* attribute selector: style.css sets checkbox width:auto */
+    appearance: none;
+    position: relative;
+    flex: none;
+    width: 2.7rem;
+    height: 1.5rem;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 99px;
+    background: var(--line);
+    cursor: pointer;
+    transition: background-color .2s;
+}
+.sw input[type="checkbox"]::after {
+    content: "";
+    position: absolute;
+    top: .17rem;
+    left: .2rem;
+    width: 1.16rem;
+    height: 1.16rem;
+    border-radius: 50%;
+    background: var(--card);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, .3);
+    transition: transform .2s;
+}
+.sw input[type="checkbox"]:checked { background: var(--dill); }
+.sw input[type="checkbox"]:checked::after { transform: translateX(1.2rem); }
+
+.tag-item,
+.tag-suggestion {
+    display: inline-flex;
+    align-items: center;
+    gap: .3rem;
+    margin: 0 .3rem .3rem 0;
+    padding: .35rem .85rem;
+    border: 1px solid var(--line);
+    border-radius: 99px;
+    background: var(--card);
+    font-size: .9rem;
+}
+.tag-item { background: var(--dill); border-color: var(--dill); color: var(--ond); }
+.tag-item .remove-tag { margin: 0; padding: 0 .2rem; border: 0; background: none; color: inherit; }
+
+/* Save bar stays in reach while the form scrolls */
+.save {
+    position: sticky;
+    bottom: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 1rem 0 0;
+    background: linear-gradient(transparent, var(--card) 30%);
+}
+.save .seg { display: inline-flex; padding: .2rem; background: var(--well); border-radius: 99px; }
+.save .seg button { margin: 0; padding: .35rem .9rem; border: 0; border-radius: 99px; background: none; color: var(--mute); }
+.save .seg button.selected { background: var(--card); color: var(--berry-d); box-shadow: 0 1px 3px rgba(0, 0, 0, .18); }
+
+/* ---------- Phones ---------- */
+
+@media (max-width: 760px) {
+    .top { flex-wrap: wrap; gap: .6rem .75rem; }
+    .top .hm, .logo small, .sbox kbd { display: none; }
+    .top .add, .top #log-in { margin-left: auto; }
+    .sbox { order: 11; flex: 1 1 12rem; margin: 0; }
+    .top .search { padding-right: 1rem; }
+    .top .shopping-list-button { order: 12; }
+
+    .hero { grid-template-columns: 1fr; grid-template-areas: "head" "decide" "filters"; gap: 1rem; }
+    .hero h1 { max-width: none; }
+    .decide { flex-direction: column; align-items: stretch; }
+    .plate { width: 100%; height: 3.6rem; border-radius: 99px; }
+    .plate span { max-width: none; }
+
+    .row { grid-template-columns: 1fr; }
+    .row > b { padding: 0; }
+    .pop { grid-column: 1; }
+    .seg .nav-buttons { padding: .35rem .75rem; }
+
+    .results { padding: 1rem; }
+    .pick, .rvh, .rvb, .top2 { grid-template-columns: 1fr; }
+    .pick .in { padding: 0 .8rem .8rem; }
+    .rvb aside.ingredients { position: static; max-height: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .pick { animation: none; }
+    .plate { transition: none; }
+}

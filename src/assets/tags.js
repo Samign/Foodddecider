@@ -39,6 +39,20 @@ export function clearTags() {
     renderTagSelection();
 }
 
+/** Turn one tag on or off by its label (used by the quick filters on the home page). */
+export function toggleTag(label) {
+    const slug = slugifyTag(label);
+    if (!slug) return false;
+    if (selectedTags.has(slug)) selectedTags.delete(slug);
+    else selectedTags.set(slug, label.trim());
+    renderTagSelection();
+    return selectedTags.has(slug);
+}
+
+export function isTagSelected(label) {
+    return selectedTags.has(slugifyTag(label));
+}
+
 export function addCustomTags(raw) {
     raw.split(',').forEach(part => {                    // "vegan, quick" adds two tags
         const label = part.trim().replace(/\s+/g, ' ');

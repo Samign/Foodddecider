@@ -50,6 +50,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // 4. Feed & Grid Features
   loadModuleIfPresent('#recipe-list', () => import('./recipes.js'));
   loadModuleIfPresent('#recipe-list', () => import('./form-router.js'));
+  loadModuleIfPresent('.hero', () => import('./hero-filters.js'));   // quick filters on the home page
 
   loadModuleIfPresent('#expanded-modal', () => import('./recipe-modal.js'));
   loadModuleIfPresent('#expanded-modal', () => import('./add_to_list.js'));

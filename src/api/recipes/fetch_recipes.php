@@ -48,6 +48,8 @@ if ($request_method === 'POST') {
         'order_by'           => $_POST['order_by'] ?? null,
         'category'           => $_POST['category'] ?? null,
         'username'           => $_POST['user'] ?? null,
+        'exclude_id'         => $_POST['exclude_id'] ?? null,
+        'with_macros'        => ($_POST['action'] ?? null) === 'random',   // the pick card shows kcal/protein
     ];
     
     echo json_encode(getRecipeCards($opts));

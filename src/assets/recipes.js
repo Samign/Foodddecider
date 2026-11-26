@@ -1,4 +1,4 @@
-import { renderRecipeList } from './recipe-cards.js';
+import { renderRecipeList, getPickHtml, getEmptyPickHtml } from './recipe-cards.js';
 import { expandRecipe, pushRecipeState } from './recipe-modal.js';
 import { toggleHidden } from './recipe-data.js';
 import { clearTags, renderTagSelection } from './tags.js';
@@ -19,21 +19,16 @@ export function init() {
     console.log("init called for recipes.js")
     path = window.location.pathname;
 
-    const personalRecipesButton = document.getElementById("personal-recipes");
-    if (personalRecipesButton) {
-        const subCategoriesContainer = document.querySelector('.sub-category-buttons');
-        if (subCategoriesContainer) {
-            subCategoriesContainer.innerHTML = personalRecipesButton.classList.contains("active")
-                ? `<button class="nav-buttons" id="favorite-recipes">My go-tos</button>
-                   <button class="nav-buttons active" id="new-recipes">Recent</button>
-                   <button class="nav-buttons" id="saved-recipes">Saved</button>`
-                : `<button class="nav-buttons" id="popular-recipes">Popular</button>
-                   <button class="nav-buttons active" id="new-recipes">Recent</button>
-                   <button class="nav-buttons" id="saved-recipes">Saved</button>`;
-        }
+    const activeButton = document.querySelector('.recipe-category-buttons .nav-buttons.active');
+    const subCategoriesContainer = document.querySelector('.sub-category-buttons');
+    if (activeButton && subCategoriesContainer) {
+        subCategoriesContainer.innerHTML = subCategoryHtml(activeButton.id);
     }
     
     initEventListeners();
+
+    // recipes.js is imported dynamically, so "tagsLoaded" may already have fired: load now in that case
+    if (window.metadata?.loaded) loadRecipes();
 
     // const recipeMatch = path.match(/\/recipe\/(\d+)/);
     // if (recipeMatch) {
@@ -45,6 +40,17 @@ export function init() {
 }
 
 document.addEventListener('tagsLoaded', loadRecipes);
+
+// Logged-out visitors only get Discover, and only there is "Saved" pointless
+function subCategoryHtml(categoryId) {
+    return categoryId === "personal-recipes"
+        ? `<button class="nav-buttons" id="favorite-recipes">My go-tos</button>
+           <button class="nav-buttons active" id="new-recipes">Recent</button>
+           <button class="nav-buttons" id="saved-recipes">Saved</button>`
+        : `<button class="nav-buttons" id="popular-recipes">Popular</button>
+           <button class="nav-buttons active" id="new-recipes">Recent</button>
+           ${document.getElementById('personal-recipes') ? '<button class="nav-buttons" id="saved-recipes">Saved</button>' : ''}`;
+}
 
 function initRangeFilter(root) {
     const minRange = root.querySelector('.range-min');
@@ -106,6 +112,27 @@ function initEventListeners() {
         filter_button.menu = "filter-menu";
     }
 
+    // "Saved" in the header: show the Saved tab of My kitchen
+    document.getElementById('nav-saved')?.addEventListener('click', () => {
+        document.getElementById('personal-recipes')?.click();
+        setTimeout(() => document.getElementById('saved-recipes')?.click(), 0);
+        document.getElementById('recipes')?.scrollIntoView({ behavior: 'smooth' });
+    });
+
+    // The "Decide for me" answer card
+    document.getElementById('pick')?.addEventListener('click', (e) => {
+        const cook = e.target.closest('.pick-cook');
+        if (cook) {
+            const id = parseInt(cook.dataset.id);
+            pushRecipeState(id);
+            expandRecipe(id);
+        } else if (e.target.closest('.pick-another')) {
+            randomRecipe();
+        } else if (e.target.closest('.empty-clear')) {
+            document.getElementById('filter-form').reset();
+        }
+    });
+
     const random_button = document.getElementById('random-button');
     if (random_button) {
         random_button.addEventListener('click', randomRecipe);
@@ -122,14 +149,7 @@ function initEventListeners() {
             const button = e.target.closest('.nav-buttons');
             if (!button || button.classList.contains("active")) return;
 
-            document.querySelector('.sub-category-buttons').innerHTML =
-                button.id === "personal-recipes"
-                    ? `<button class="nav-buttons" id="favorite-recipes">My go-tos</button>
-                       <button class="nav-buttons active" id="new-recipes">Recent</button>
-                       <button class="nav-buttons" id="saved-recipes">Saved</button>`
-                    : `<button class="nav-buttons" id="popular-recipes">Popular</button>
-                       <button class="nav-buttons active" id="new-recipes">Recent</button>
-                       <button class="nav-buttons" id="saved-recipes">Saved</button>`;
+            document.querySelector('.sub-category-buttons').innerHTML = subCategoryHtml(button.id);
 
             activeSubCategory = document.querySelector('.sub-category-buttons .nav-buttons.active');
             activeCategory.classList.remove("active");
@@ -276,20 +296,16 @@ function renderCourseSelection() {
 
 // ── Data loading ──────────────────────────────────────────────────────────────
 
-async function loadRecipes() {
-
-    const token = ++loadToken;
-
-    const recipeList = document.getElementById('recipe-list');
-    recipeList.innerHTML = '<p>Loading recipes...</p>';
-
-    const filterForm = document.getElementById('filter-form');
-    const formData   = new FormData(filterForm);
+// Everything that decides which recipes are in play: filter form + active tab + sub-tab
+function buildFormData() {
+    const formData = new FormData(document.getElementById('filter-form'));
 
     if (activeCategory?.id === "public-recipes") {
         formData.append('public', '1');
     } else if (activeCategory?.id === "friends-recipes") {
         formData.append('category', 'following');
+    } else if (activeCategory?.id === "all-recipes") {
+        formData.append('category', 'all');
     }
 
     path = window.location.pathname;
@@ -306,29 +322,59 @@ async function loadRecipes() {
         defaultOrder = 'views';
     }
     formData.set('order_by', sortSelect?.value || defaultOrder);
+    return formData;
+}
+
+async function loadRecipes() {
+
+    const token = ++loadToken;
+
+    const recipeList = document.getElementById('recipe-list');
+    recipeList.innerHTML = '<p>Loading recipes...</p>';
 
     const response = await fetch('/api/recipes/fetch_recipes.php', {
         method: 'POST',
-        body: formData
+        body: buildFormData()
     });
 
     const recipes = await response.json();
 
     if (token !== loadToken) return; // Ignore if a newer request has been made
     renderRecipeList(recipeList, recipes);
+    recipeList.dataset.count = recipes.length;   // for anything that loads after this first render
+    document.dispatchEvent(new CustomEvent('recipesLoaded', { detail: { count: recipes.length } }));
 }
 
+let lastPickId = null;
+
+// Picks from the same recipes the grid shows, and shows the answer as a card (not straight into the modal)
 async function randomRecipe() {
-    const formData = new FormData(document.getElementById("filter-form"));
+    const pick = document.getElementById('pick');
+    const formData = buildFormData();
     formData.append('action', 'random');
+    if (lastPickId) formData.append('exclude_id', lastPickId);   // "Another one" never repeats the last pick
 
     const response = await fetch('/api/recipes/fetch_recipes.php', {
         method: 'POST',
         body: formData
     });
-
     const result = await response.json();
-    const recipe  = result[0];
-    pushRecipeState(recipe.id);
-    expandRecipe(recipe.id);
+    const recipe = result[0];
+
+    // Only one recipe fits and it was the last pick: show it again rather than "nothing found"
+    if (!recipe && lastPickId) {
+        lastPickId = null;
+        return randomRecipe();
+    }
+
+    // No pick card on this page (e.g. a profile): keep the old behaviour
+    if (!pick) {
+        if (recipe) { pushRecipeState(recipe.id); expandRecipe(recipe.id); }
+        return;
+    }
+
+    pick.hidden = false;
+    pick.innerHTML = recipe ? getPickHtml(recipe) : getEmptyPickHtml();
+    lastPickId = recipe?.id ?? null;
+    pick.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
