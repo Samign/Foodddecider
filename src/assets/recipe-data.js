@@ -12,8 +12,10 @@ export function toggleHidden(evt) {
     }
     if (menu.id === "add-from-url-modal") {
         const form = document.getElementById("import-url-form");
-        form.addEventListener('submit', handleAddFromUrl);
-        form.hasListener = true;
+        if (!form.hasListener) {                 // only once, or each open adds another import per submit
+            form.addEventListener('submit', handleAddFromUrl);
+            form.hasListener = true;
+        }
     }
 }
 

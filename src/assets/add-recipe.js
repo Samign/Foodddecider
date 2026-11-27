@@ -356,23 +356,37 @@ export async function handleAddRecipe(e) {
 
 export async function handleAddFromUrl(e) {
     e.preventDefault();
-    
+
     const form = e.target;
-    const formData = new FormData(form);
-    
-    const response = await fetch('/api/recipes/import_recipe_url.php', {
-        method: 'POST',
-        body: formData
-    });
-    
-    const result = await response.json();
-    
-    if (result.success) {
-        toast.success('Recipe added successfully');
-        form.reset();
-    }
-    else {
-        console.log('error?');
-        toast.error('Failed to add recipe');
+    const button = form.querySelector('button[type="submit"]');
+    if (button.disabled) return;                       // already importing
+
+    // Reading a page with the local model can take a minute or two
+    const label = button.textContent;
+    button.disabled = true;
+    button.textContent = 'Reading the recipe…';
+
+    try {
+        const response = await fetch('/api/recipes/import_recipe_url.php', {
+            method: 'POST',
+            body: new FormData(form)
+        });
+        const result = await response.json().catch(() => ({}));   // 401/500 can come back without JSON
+
+        if (result.success) {
+            toast.success('Recipe imported. Check it over in My kitchen.');
+            form.reset();
+            document.getElementById('add-from-url-modal')?.classList.add('hidden');
+            document.getElementById('personal-recipes')?.click();
+        } else if (response.status === 401) {
+            toast.error('Log in to import recipes');
+        } else {
+            toast.error(result.error || 'Could not import that recipe');
+        }
+    } catch {
+        toast.error('Could not reach the server. Try again.');
+    } finally {
+        button.disabled = false;
+        button.textContent = label;
     }
 }

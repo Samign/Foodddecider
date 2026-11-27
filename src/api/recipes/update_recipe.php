@@ -82,12 +82,13 @@ try {
         saveTags($db, $recipe_id, $input['tags']);
     }
 
-    if (isset($input['step_sections'])) {
-        saveStepSections($db, $recipe_id, $input['step_sections']);
+    // fetchRecipeInput() names these 'steps' / 'ingredients' (the form's step_sections / ingredient_sections)
+    if (isset($input['steps'])) {
+        saveStepSections($db, $recipe_id, $input['steps']);
     }
 
-    if (isset($input['ingredient_sections'])) {
-        saveIngredientSections($db, $recipe_id, $input['ingredient_sections']);
+    if (isset($input['ingredients'])) {
+        saveIngredientSections($db, $recipe_id, $input['ingredients']);
     }
 
     $db->commit();

@@ -44,9 +44,9 @@ function getNavBar()
 
     ?>
     <header class="top">
-        <a href="/" class="logo">FoodDecider<small>Smart pantry &amp; dinners</small></a>
+        <a href="/" class="logo">FoodDecider</a>
         <form action="/results" method="GET" class="sbox">
-            <input class="search" id="q" type="search" name="q" placeholder="Search ingredients, dishes, cravings…" aria-label="Search ingredients, dishes, cravings" autocomplete="off">
+            <input class="search" id="q" type="search" name="q" placeholder="Search ingredients, dishes, users" aria-label="Search ingredients, dishes, users" autocomplete="off">
             <kbd>⌘K</kbd>
         </form>
         <?php if ($user): ?>

@@ -39,6 +39,16 @@ function fetchRecipeInput() {
     ];
 }
 
+/** "1/2", "1 1/2", "½", "0,5", "2-3" -> 0.5, 1.5, 0.5, 0.5, 2. The old regex turned "1/2" into 1. */
+function parseAmount($value): ?float {
+    if ($value === null || $value === '') return null;
+    $s = strtr((string)$value, ['½' => ' 1/2', '¼' => ' 1/4', '¾' => ' 3/4', '⅓' => ' 1/3', '⅔' => ' 2/3', ',' => '.']);
+    if (preg_match('~(\d+)\s+(\d+)/(\d+)~', $s, $m) && (int)$m[3] > 0) return $m[1] + $m[2] / $m[3];
+    if (preg_match('~(\d+)/(\d+)~', $s, $m)) return (int)$m[2] > 0 ? $m[1] / $m[2] : null;
+    if (preg_match('~\d+(?:\.\d+)?~', $s, $m)) return (float)$m[0];
+    return null;
+}
+
 function normalizeName($name) {
     $name = strtolower($name);
     // Replace non-alphanumeric characters with spaces (NOT hyphens)
@@ -246,8 +256,7 @@ function saveIngredientSections(PDO $db, int $recipeId, array $ingredientSection
                     $raw = $ingredient['raw'] ?? '';
                     if (trim($raw) === '') continue;
  
-                    preg_match('/[\d.]+/', $ingredient['amount'] ?? '', $amountMatch);
-                    $amount = !empty($amountMatch[0]) ? $amountMatch[0] : null;
+                    $amount = parseAmount($ingredient['amount'] ?? null);
                     $unit   = $ingredient['unit'] ?? null;
                     $size   = $ingredient['size'] ?? null;
                     $name   = $ingredient['ingredient'] ?? $raw;
