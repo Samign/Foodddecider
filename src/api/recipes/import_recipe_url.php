@@ -1,4 +1,5 @@
 <?php
+require_once __DIR__ . '/../../includes/json_response.php';   // JSON content type (see the file)
 require_once __DIR__ . '/../../includes/require_login.php';     // imports run the LLM: logged-in users only
 require_once __DIR__ . '/../../includes/db.php';
 require_once __DIR__ . '/../../includes/recipe_adder.php';

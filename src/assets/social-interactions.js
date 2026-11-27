@@ -1,4 +1,5 @@
 import { toast } from './toast.js';
+import { escapeHtml } from './recipe-cards.js';
 
 let inviteModal = null;
 let badgeCount;
@@ -192,7 +193,8 @@ async function loadInvitations() {
         updateBadgeUI(invitations.count);
         renderInvitations(invitations.invitations);
     } catch (error) {
-        inviteModal.innerHTML = '<p>Error loading invitations. Please try again later. ' + error + ' </p>';
+        inviteModal.innerHTML = '<p>Could not load invitations. Please try again later.</p>';
+        console.error(error);
     }
 }
 
@@ -208,7 +210,8 @@ async function loadGroups() {
 
         renderGroups(groups.groups);
     } catch (error) {
-        document.querySelector('#group-list').innerHTML = '<p>Error loading groups. Please try again later. ' + error + ' </p>';
+        document.querySelector('#group-list').innerHTML = '<p>Could not load groups. Please try again later.</p>';
+        console.error(error);
     }
 }
 
@@ -219,8 +222,8 @@ function renderGroups(groups) {
         const groupElement = document.createElement('div');
         groupElement.classList.add('group');
         groupElement.innerHTML = `
-            <p>${group.group_name}</p>
-            <button class="leave-group" data-id="${group.id}">Leave</button>
+            <p>${escapeHtml(group.group_name)}</p>
+            <button class="leave-group" data-id="${escapeHtml(group.id)}">Leave</button>
         `;
         groupList.appendChild(groupElement);
     });
@@ -258,9 +261,9 @@ function renderInvitations(invitations) {
         const invitationElement = document.createElement('div');
         invitationElement.classList.add('invitation');
         invitationElement.innerHTML = `
-            <p>${invitation.group_name} - Invited by ${invitation.inviter_name}</p>
-            <button class="accept-invite" data-id="${invitation.invitation_id}">Accept</button>
-            <button class="decline-invite" data-id="${invitation.invitation_id}">Decline</button>
+            <p>${escapeHtml(invitation.group_name)} - Invited by ${escapeHtml(invitation.inviter_name)}</p>
+            <button class="accept-invite" data-id="${escapeHtml(invitation.invitation_id)}">Accept</button>
+            <button class="decline-invite" data-id="${escapeHtml(invitation.invitation_id)}">Decline</button>
         `;
         inviteModal.appendChild(invitationElement);
     });

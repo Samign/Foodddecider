@@ -1,4 +1,5 @@
 <?php
+require_once __DIR__ . '/../../includes/json_response.php';   // JSON content type (see the file)
 // Shared by shopping_lists.php and shopping_items.php
 require_once __DIR__ . '/../../includes/session.php';
 require_once __DIR__ . '/../../includes/db.php';

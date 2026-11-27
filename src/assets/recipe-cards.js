@@ -4,11 +4,40 @@ export function escapeHtml(value) {
     })[c]);
 }
 
-export function getRecipeImage(recipe) {
-    return recipe.image_base
-        ? `<img src="/uploads/recipe_pictures/${escapeHtml(recipe.image_base)}.webp" alt="">`
-        : `<div class="placeholder"><span class="material-symbols-outlined">chef_hat</span></div>`;
+// ── Images ────────────────────────────────────────────────────────────────────
+// includes/upload_image.php saves each picture in a few sizes: recipe "" (1600 px) and "_600",
+// profile "" (512 px) and "_200". Pictures uploaded before that only have the full size, so
+// smaller ones fall back to it (see the error listener below).
+
+export function imageUrl(type, base, size = '') {
+    return `/uploads/${type}_pictures/${encodeURIComponent(base)}${size}.webp`;
 }
+
+/** <img> for a recipe; size "_600" for cards, "" for the full recipe view. */
+export function getRecipeImage(recipe, size = '') {
+    if (!recipe.image_base) {
+        return `<div class="placeholder"><span class="material-symbols-outlined">chef_hat</span></div>`;
+    }
+    const full = imageUrl('recipe', recipe.image_base);
+    return `<img src="${size ? imageUrl('recipe', recipe.image_base, size) : full}"
+                 ${size ? `data-fallback="${full}"` : ''} alt="" loading="lazy" decoding="async">`;
+}
+
+/** Profile picture url (or the generated avatar for people without one). */
+export function avatarUrl(username, imageBase, size = '_200') {
+    return imageBase
+        ? imageUrl('profile', imageBase, size)
+        : `/uploads/profile_pictures/${encodeURIComponent(username)}_avatar.svg`;
+}
+
+// One listener for every image: a missing small size falls back to the full picture
+document.addEventListener('error', (e) => {
+    const img = e.target;
+    if (img instanceof HTMLImageElement && img.dataset.fallback && !img.dataset.fellBack) {
+        img.dataset.fellBack = '1';
+        img.src = img.dataset.fallback;
+    }
+}, true);
 
 // "dinner", from the course types meta-data-loader.js loaded
 export function getCourseName(recipe) {
@@ -41,15 +70,14 @@ function getMatchHtml(recipe) {
 }
 
 export function getRecipeHtml(recipe) {
-    const ownerImg = recipe.owner_image
-        ? `${recipe.owner_image}.webp`
-        : `${recipe.owner_username}_avatar.svg`;
     const course = getCourseName(recipe);
+    const ownerAvatar = avatarUrl(recipe.owner_username, recipe.owner_image);
+    const ownerFull = avatarUrl(recipe.owner_username, recipe.owner_image, '');
 
     return `
-        <div class="recipe-card" data-id="${recipe.id}" data-course="${escapeHtml(course)}">
-            ${recipe.is_owner ? '' : `<img class="owner-image" src="/uploads/profile_pictures/${escapeHtml(ownerImg)}" alt="${escapeHtml(recipe.owner_username)}" title="by ${escapeHtml(recipe.owner_username)}">`}
-            <div class="recipe-image-container">${getRecipeImage(recipe)}</div>
+        <div class="recipe-card" data-id="${Number(recipe.id)}" data-course="${escapeHtml(course)}">
+            ${recipe.is_owner ? '' : `<img class="owner-image" src="${ownerAvatar}" data-fallback="${ownerFull}" alt="${escapeHtml(recipe.owner_username)}" title="by ${escapeHtml(recipe.owner_username)}" loading="lazy">`}
+            <div class="recipe-image-container">${getRecipeImage(recipe, '_600')}</div>
             <div class="recipe-content">
                 <div class="card-meta">
                     <span>${formatMinutes(recipe.total_time_minutes)}</span>
@@ -71,14 +99,14 @@ export function getPickHtml(recipe, poolSize = null) {
 
     return `
         <div class="pick" data-course="${escapeHtml(getCourseName(recipe))}">
-            <div class="pick-image">${getRecipeImage(recipe)}</div>
+            <div class="pick-image">${getRecipeImage(recipe, '_600')}</div>
             <div class="in">
                 <span class="pk">Picked for you</span>
                 <h2>${escapeHtml(recipe.title)}</h2>
                 <p class="meta">${facts.map(f => `<span>${escapeHtml(f)}</span>`).join('')}</p>
                 ${recipe.description ? `<p class="pick-desc">${escapeHtml(recipe.description)}</p>` : ''}
                 <div class="act">
-                    <button type="button" class="btn p pick-cook" data-id="${recipe.id}">Cook this</button>
+                    <button type="button" class="btn p pick-cook" data-id="${Number(recipe.id)}">Cook this</button>
                     <button type="button" class="btn pick-another">Another one</button>
                 </div>
             </div>

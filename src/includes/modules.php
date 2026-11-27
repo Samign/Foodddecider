@@ -2,6 +2,7 @@
 
 require_once __DIR__ . '/session.php';
 require_once __DIR__ . '/user_fetcher.php';
+require_once __DIR__ . '/upload_image.php';   // photo limits, shared with assets/photo-check.js
 
 
 /**
@@ -20,12 +21,12 @@ function getUser()
 
 /**
  * Fonts and stylesheets, the same on every page that uses getNavBar().
- * Also sets the saved theme before first paint so dark mode doesn't flash light.
+ * theme-init.js sets the saved theme before first paint so dark mode doesn't flash light.
  */
 function getHeadAssets()
 {
     ?>
-    <script>try{var t=localStorage.getItem('theme');if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+    <script src="/assets/theme-init.js"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com/" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,400..800&display=swap" rel="stylesheet">
@@ -339,7 +340,9 @@ function getLoginModal()
                 <label for="password">password</label>
                 <input id="password" type="password" name="password">
                 <label for="picture">Profile Picture</label>
-                <input id="picture" type="file" name="picture">
+                <input id="picture" type="file" name="picture" accept="image/jpeg,image/png,image/webp,image/gif"
+                       <?= imageRulesAttributes() ?> aria-describedby="signup-photo-message">
+                <p class="photo-message" id="signup-photo-message" role="alert" hidden></p>
                 <button type="submit">Create account</button>
             </form>
             <form method="POST" action="/auth/login.php">
@@ -480,16 +483,17 @@ function addEditModal()
             <h2 class="form-title">Add a recipe</h2>
 
             <div class="top2">
-                <div class="upload-box" id="uploadBox">
-                    <input name="picture" type="file" id="picture" accept="image/*" hidden>
+                <div class="upload-box" id="uploadBox" <?= imageRulesAttributes() ?>>
+                    <input name="picture" type="file" id="picture" accept="image/jpeg,image/png,image/webp,image/gif" hidden aria-describedby="photo-message">
                     <label for="picture" class="upload-label">
                         <div class="upload-content" id="uploadContent">
                             <span class="material-symbols-outlined icon-background">add_a_photo</span>
                             <p>Add a photo</p>
-                            <p>JPG, PNG or WEBP, optional</p>
+                            <p>JPG, PNG, WEBP or GIF, up to <?= (int)(IMAGE_MAX_BYTES / 1024 / 1024) ?> MB. Optional</p>
                         </div>
                         <img id="preview" class="preview hidden" alt="">
                     </label>
+                    <p class="photo-message" id="photo-message" role="alert" hidden></p>
                 </div>
                 <div class="fm">
                     <div><label class="l" for="name">Title</label><input class="in-t" type="text" name="name" id="name" autocomplete="off" required></div>

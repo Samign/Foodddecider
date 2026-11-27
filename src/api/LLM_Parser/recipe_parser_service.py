@@ -15,6 +15,10 @@ import asyncpg
 from enum import Enum
 import os
 import re 
+import ipaddress
+import asyncio
+import socket
+from urllib.parse import urlsplit
 from bs4 import BeautifulSoup
 from json_repair import repair_json
 
@@ -301,6 +305,34 @@ def drop_impossible_diet_tags(tags: List[str], ingredient_sections: List[dict]) 
     names = " ".join(i["ingredient"].lower() for s in ingredient_sections for i in s["ingredients"])
     return [t for t in tags
             if not (slugify(t) in DIET_CONFLICTS and re.search(DIET_CONFLICTS[slugify(t)], names))]
+
+
+# ── Only fetch public web pages ───────────────────────────────────────────────
+# The URL comes from a user. Without this check "import recipe" could be pointed at
+# http://db:5432, http://ollama:11434, cloud metadata (169.254.169.254) and so on.
+# Set ALLOW_PRIVATE_URLS=1 only for local testing.
+
+async def assert_public_url(url: str) -> None:
+    parts = urlsplit(str(url))
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        raise HTTPException(status_code=400, detail="Only http(s) links can be imported")
+    if os.getenv("ALLOW_PRIVATE_URLS") == "1":
+        return
+    try:
+        infos = await asyncio.get_running_loop().getaddrinfo(parts.hostname, parts.port or 443, type=socket.SOCK_STREAM)
+    except socket.gaierror:
+        raise HTTPException(status_code=400, detail="That site could not be found")
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0])
+        if not ip.is_global:
+            raise HTTPException(status_code=400, detail="That address is not a public website")
+
+
+async def _check_request(request: httpx.Request) -> None:
+    await assert_public_url(str(request.url))      # runs again for every redirect
+
+
+MAX_PAGE_BYTES = 3 * 1024 * 1024
 
 
 def find_jsonld_recipe(soup: BeautifulSoup) -> Optional[dict]:
@@ -764,22 +796,30 @@ class RecipeParser:
     
     async def fetch_webpage(self, url: str) -> dict:
         """Fetch and extract text content from webpage"""
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=30.0, max_redirects=5,
+                                     event_hooks={"request": [_check_request]}) as client:
             try:
-                response = await client.get(
+                async with client.stream(
+                    "GET",
                     str(url),
                     headers={
                         "User-Agent": "Mozilla/5.0 (compatible; RecipeParser/1.0)",
                         "Accept": "text/html,application/xhtml+xml"
                     },
                     follow_redirects=True
-                )
-                response.raise_for_status()
-                
-                html_content = response.text
-                
+                ) as response:
+                    response.raise_for_status()
+                    body = b""
+                    async for chunk in response.aiter_bytes():
+                        body += chunk
+                        if len(body) > MAX_PAGE_BYTES:      # a recipe page is never this big
+                            break
+                    html_content = body.decode(response.encoding or "utf-8", errors="replace")
+
                 return await self.extract_recipe_content(html_content)
-                
+
+            except HTTPException:
+                raise
             except Exception as e:
                 logger.error(f"Error fetching webpage: {e}")
                 raise HTTPException(status_code=400, detail=f"Failed to fetch webpage: {str(e)}")

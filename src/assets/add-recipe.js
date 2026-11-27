@@ -1,6 +1,7 @@
 import { toggleHidden } from "./recipe-data.js";
 import { addIngredient, addStep, addIngredientSection, addStepSection } from "./sections.js";
 import { toast } from './toast.js';
+import { showPhotoError } from './drag-and-drop.js';
 
 let lastSelectedIngredientSection = null;
 let lastSelectedIngredientItem = null;
@@ -332,25 +333,49 @@ export function setRecipeTimes(form, prepMinutes, cookMinutes) {
     renderTimeFields(form);
 }
 
+/**
+ * Shared by add, edit and fork: turns the server's answer into messages.
+ * A photo problem (field: "picture") is shown under the photo box, and the form keeps
+ * everything that was typed so the person can choose another photo and save again.
+ * Returns true when the recipe was saved.
+ */
+export async function readSaveResponse(response, failText) {
+    const result = await response.json().catch(() => ({}));
+
+    // nginx refuses very large uploads itself (client_max_body_size) before PHP sees them
+    if (response.status === 413) {
+        result.field = 'picture';
+        result.error = 'The photo is too big. Choose a smaller one.';
+    }
+
+    if (result.field === 'picture') {
+        showPhotoError(result.error);
+        toast.error(result.error);
+        return false;
+    }
+    if (!response.ok || !result.success) {
+        toast.error(result.error || failText);
+        return false;
+    }
+    if (result.warning) toast.info(result.warning, { duration: 8000 });
+    return true;
+}
+
 export async function handleAddRecipe(e) {
     e.preventDefault();
 
     const form = e.target;
-    const formData = new FormData(form);
-    
-    const response = await fetch('/api/recipes/add_recipe.php', {
-        method: 'POST',
-        body: formData
-    });
-    
-    const result = await response.json();
-    
-    if (result.success) {
-        toast.success('Recipe added successfully');
-        form.reset();
-    }
-    else {
-        toast.error('Failed to add recipe');
+    try {
+        const response = await fetch('/api/recipes/add_recipe.php', {
+            method: 'POST',
+            body: new FormData(form)
+        });
+        if (await readSaveResponse(response, 'Failed to add recipe')) {
+            toast.success('Recipe added successfully');
+            form.reset();
+        }
+    } catch {
+        toast.error('Could not reach the server. Your recipe is still in the form, try again.');
     }
 }
 

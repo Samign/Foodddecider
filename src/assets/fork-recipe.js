@@ -1,4 +1,4 @@
-import { handleAddRecipe } from './add-recipe.js';
+import { handleAddRecipe, readSaveResponse } from './add-recipe.js';
 import { toast } from './toast.js';
 import { grabAndDisplayEdit } from './edit-recipe.js';
 
@@ -21,12 +21,11 @@ export async function submitFork(e) {
             method: 'POST',
             body: formData
         });
-        const result = await response.json();
-        if (!response.ok) throw new Error(result.error || 'Failed to fork recipe');
+        if (!await readSaveResponse(response, 'Failed to fork recipe')) return;   // form stays open to fix
 
         document.getElementById('add-menu').classList.toggle("hidden");
         toast.success('Recipe forked successfully');
     } catch (error) {
-        toast.error('Failed to fork recipe');
+        toast.error('Could not reach the server. Your recipe is still in the form, try again.');
     }
 }

@@ -1,9 +1,20 @@
 import { handleEdit } from './edit-recipe.js';
-import { escapeHtml, getRecipeImage } from './recipe-cards.js';
+import { escapeHtml, getRecipeImage, avatarUrl } from './recipe-cards.js';
+
 import { fetchRecipeById, parseJson, groupBySection } from './recipe-data.js';
 import { toast } from './toast.js';
 import { confirmDialog } from './dialog.js';
 import { forkRecipe } from './fork-recipe.js';
+
+// Only real web links become clickable: a saved "javascript:..." link would run on click
+function safeHttpUrl(value) {
+    try {
+        const url = new URL(String(value), location.origin);
+        return url.protocol === 'http:' || url.protocol === 'https:' ? url.href : null;
+    } catch {
+        return null;
+    }
+}
 
 let overlay, expandedModal, expanded = false;
 
@@ -221,7 +232,7 @@ function renderIngredients(ingredientsEl, recipeIngredients, recipeSections, cov
 
         return `<div class="ingredient-item">
             <span class="material-symbols-outlined ingredient-checkbox">circle</span>
-            <p>${amount} ${unit}${size}${escapeHtml(name)}</p>
+            <p>${escapeHtml(amount)} ${escapeHtml(unit)}${escapeHtml(size)}${escapeHtml(name)}</p>
             ${badge}
             <button class="ingredient-add-button" title="Add to shopping list" aria-label="Add to shopping list">
                 <span class="material-symbols-outlined">add</span>
@@ -294,34 +305,37 @@ export async function expandRecipe(recipeId) {
     courseText.textContent = window.metadata.courseTypes.get(recipe.course_types).name;
 
     recipeOwner.innerHTML = `
-        <a class="recipe-userinfo" href="/user/${escapeHtml(recipe.owner_username)}">
+        <a class="recipe-userinfo" href="/user/${encodeURIComponent(recipe.owner_username)}">
             <img class="owner-profile-pic"
-                src="/uploads/profile_pictures/${recipe.owner_image ? recipe.owner_image + '.webp' : recipe.owner_username + '_avatar.svg'}"
-                alt="Owner Image">
+                src="${avatarUrl(recipe.owner_username, recipe.owner_image)}"
+                data-fallback="${avatarUrl(recipe.owner_username, recipe.owner_image, '')}"
+                alt="">
             <div>
                 <h4>Archived by</h4>
                 <h4 class="recipe-owner-username">${escapeHtml(recipe.owner_username)}</h4>
             </div>
     </a>`;
 
-    tags.innerHTML = recipe.recipe_tags ? JSON.parse(recipe.recipe_tags).map(t => `<a href="/results?q=${encodeURIComponent(t.name)}" class="pill">${t.name}</a>`).join('') : '';
+    // Tag names are typed by users: escape them
+    tags.innerHTML = parseJson(recipe.recipe_tags).map(t =>
+        `<a href="/results?q=${encodeURIComponent(t.name)}" class="pill">${escapeHtml(t.name)}</a>`).join('');
 
     // Prep is optional (see the "Split into prep and cook" switch): only show it when it was given
     const hasPrep = recipe.prep_time_minutes != null && Number(recipe.prep_time_minutes) > 0;
     time.innerHTML = `
         ${hasPrep ? `<div class="recipe-time-section">
             <h5>PREP TIME</h5>
-            <span>${recipe.prep_time_minutes} Mins</span>
+            <span>${Number(recipe.prep_time_minutes)} Mins</span>
         </div>
         <span class="divider"></span>` : ''}
         <div class="recipe-time-section">
             <h5>TOTAL TIME</h5>
-            <span>${recipe.total_time_minutes} Mins</span>
+            <span>${Number(recipe.total_time_minutes) || 0} Mins</span>
         </div>
         <span class="divider"></span>
         <div class="recipe-time-section">
             <h5>SERVINGS</h5>
-            <span>${recipe.servings ? recipe.servings + ' Servings' : '1 Serving'}</span>
+            <span>${Number(recipe.servings) > 1 ? Number(recipe.servings) + ' Servings' : '1 Serving'}</span>
         </div>
     `;
         
@@ -329,7 +343,7 @@ export async function expandRecipe(recipeId) {
     title.textContent       = recipe.title;
     description.textContent = recipe.description;
     image.innerHTML         = getRecipeImage(recipe);
-    views.innerHTML         = `<span class="material-symbols-outlined">visibility</span><p>${recipe.view_count} views</p>`;
+    views.innerHTML         = `<span class="material-symbols-outlined">visibility</span><p>${Number(recipe.view_count) || 0} views</p>`;
 
     renderSteps(steps, recipe);
 
@@ -340,7 +354,7 @@ export async function expandRecipe(recipeId) {
                <span class="material-symbols-outlined">bookmark</span>
                ${recipe.is_saved ? 'Remove from favorites' : 'Save to Favorites'}
            </button>
-           ${recipe.link ? `<a href="${recipe.link}" target="_blank" class="external-link-button">
+           ${safeHttpUrl(recipe.link) ? `<a href="${escapeHtml(safeHttpUrl(recipe.link))}" target="_blank" rel="noopener noreferrer nofollow" class="external-link-button">
                <span class="material-symbols-outlined">open_in_new</span>Open Recipe External Link
            </a>` : ''}
            <button class="recipe-action-button" id="fork-recipe-button" data-id="${id}">

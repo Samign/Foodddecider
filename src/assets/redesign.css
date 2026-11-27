@@ -541,6 +541,19 @@ h1, h2, h3,
 .top2 { display: grid; grid-template-columns: 12rem 1fr; gap: 1.2rem; }
 .top2 .upload-box { width: 100%; }
 
+/* Photo check messages (assets/photo-check.js) */
+.photo-message {
+    margin: .5rem 0 0;
+    padding: .55rem .8rem;
+    border-radius: 10px;
+    font-size: .88rem;
+    line-height: 1.35;
+}
+.photo-message.is-error { background: var(--berry-t); color: var(--berry-d); font-weight: 500; }
+.photo-message.is-warning { background: var(--well); color: var(--ink); }
+.upload-box.is-invalid .upload-label { border-color: var(--berry); }
+.upload-box.is-checking .upload-label { opacity: .6; cursor: progress; }
+
 .tbox { display: grid; gap: .8rem; padding: 1rem; background: var(--bg); border-radius: 16px; }
 .tin { display: flex; flex-wrap: wrap; align-items: end; gap: .8rem; }
 .tin label { display: block; font-size: .8rem; color: var(--mute); }

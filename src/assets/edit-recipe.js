@@ -2,7 +2,7 @@ import { fillEditList } from './sections.js';
 import { parseJson, fetchRecipeById } from './recipe-data.js'
 import { showLoadedpreview } from './drag-and-drop.js';
 import { toast } from './toast.js';
-import { setRecipeTimes } from './add-recipe.js';
+import { setRecipeTimes, readSaveResponse } from './add-recipe.js';
 
 let addForm = null;
 
@@ -84,12 +84,11 @@ export async function submitEdit(e) {
             method: 'POST',
             body: formData
         });
-        const result = await response.json();
-        if (!response.ok) throw new Error(result.error || 'Failed to update recipe');
+        if (!await readSaveResponse(response, 'Failed to update recipe')) return;   // form stays open to fix
 
         document.getElementById('add-menu').classList.toggle("hidden");
         toast.success('Recipe updated successfully');
     } catch (error) {
-        toast.error('Failed to update recipe');
+        toast.error('Could not reach the server. Your changes are still in the form, try again.');
     }
 }

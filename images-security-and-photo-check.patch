@@ -1,0 +1,1938 @@
+diff --git a/docker-compose.yml b/docker-compose.yml
+index 321c4c3..8d8210f 100644
+--- a/docker-compose.yml
++++ b/docker-compose.yml
+@@ -32,7 +32,7 @@ services:
+     image: adminer
+     restart: always
+     ports:
+-      - 8080:8080
++      - "127.0.0.1:8080:8080"   # database admin: only from this machine
+ 
+   # Redis for caching and Celery broker
+   # redis:
+@@ -53,7 +53,7 @@ services:
+     image: ollama/ollama:latest
+     container_name: recipe_ollama
+     ports:
+-      - "11434:11434"
++      - "127.0.0.1:11434:11434" # only this machine; nobody else should run your model
+     volumes:
+       - ./ollama_data:/root/.ollama
+     deploy:
+@@ -78,7 +78,7 @@ services:
+       dockerfile: Dockerfile.python
+     container_name: recipe_api
+     ports:
+-      - "8001:8001"
++      - "127.0.0.1:8001:8001"   # only this machine; PHP reaches it as http://api:8001
+     environment:
+       - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/fooddecider
+       # - REDIS_URL=redis://redis:6379/0
+@@ -132,7 +132,7 @@ services:
+     image: prom/prometheus:latest
+     container_name: recipe_prometheus
+     ports:
+-      - "9090:9090"
++      - "127.0.0.1:9090:9090"   # metrics have no login: only from this machine
+     volumes:
+       - ./prometheus.yml:/prometheus.yml
+       - prometheus_data:/prometheus
+diff --git a/nginx.conf b/nginx.conf
+index d112341..e86b98f 100644
+--- a/nginx.conf
++++ b/nginx.conf
+@@ -6,6 +6,36 @@ server {
+     root /var/www/html;
+     index index.php index.html;
+ 
++    client_max_body_size 10m;   # photo uploads (upload_image.php accepts up to 8 MB)
++
++    # ── Security headers ──────────────────────────────────────────────
++    # The CSP is the safety net if an XSS bug ever slips through: scripts only from this site
++    # (no inline <script>, no onclick=...), fonts from Google, everything else from this site.
++    # NOTE: nginx drops these in any location that has its own add_header, see /uploads/ below.
++    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'" always;
++    add_header X-Content-Type-Options "nosniff" always;
++    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
++    add_header X-Frame-Options "SAMEORIGIN" always;
++
++    # ── Uploaded pictures ─────────────────────────────────────────────
++    # File names change whenever a picture changes, so they can be cached for a long time.
++    # Nothing in here is ever run as PHP, and SVG avatars can't run scripts.
++    location ^~ /uploads/ {
++        location ~ \.php$ { deny all; }
++        expires 30d;
++        add_header Cache-Control "public" always;
++        add_header X-Content-Type-Options "nosniff" always;
++        add_header Content-Security-Policy "default-src 'none'; style-src 'unsafe-inline'; sandbox" always;
++        try_files $uri =404;
++    }
++
++    location ^~ /assets/ {
++        expires 1h;
++        add_header Cache-Control "public" always;
++        add_header X-Content-Type-Options "nosniff" always;
++        try_files $uri =404;
++    }
++
+     # A. Clean Route: /user/username -> user.php?username=username
+     location ~ ^/user/([^/]+)$ {
+         try_files /user.php =404;
+@@ -43,13 +73,10 @@ server {
+         fastcgi_param PATH_INFO $fastcgi_path_info;
+     }
+ 
+-    # 3. ROUTE ONLY PYTHON API REQUESTS (Non-PHP Python FastAPI/Flask endpoints)
+-    location /parser-api/ {
+-        proxy_pass http://recipe_api:8001/;
+-        proxy_set_header Host $host;
+-        proxy_set_header X-Real-IP $remote_addr;
+-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+-    }
++    # 3. The recipe parser (Python) is NOT exposed here on purpose. It used to be at /parser-api/,
++    #    which let anyone, logged in or not, run the LLM and make the server fetch any URL,
++    #    including internal ones. PHP reaches it directly at http://api:8001
++    #    (api/recipes/import_recipe_url.php), behind the login check.
+ 
+     # Hide dotfiles (.env, .git)
+     location ~ /\. {
+diff --git a/src/api/LLM_Parser/recipe_parser_service.py b/src/api/LLM_Parser/recipe_parser_service.py
+index c48496c..01b4386 100644
+--- a/src/api/LLM_Parser/recipe_parser_service.py
++++ b/src/api/LLM_Parser/recipe_parser_service.py
+@@ -15,6 +15,10 @@ import asyncpg
+ from enum import Enum
+ import os
+ import re 
++import ipaddress
++import asyncio
++import socket
++from urllib.parse import urlsplit
+ from bs4 import BeautifulSoup
+ from json_repair import repair_json
+ 
+@@ -303,6 +307,34 @@ def drop_impossible_diet_tags(tags: List[str], ingredient_sections: List[dict])
+             if not (slugify(t) in DIET_CONFLICTS and re.search(DIET_CONFLICTS[slugify(t)], names))]
+ 
+ 
++# ── Only fetch public web pages ───────────────────────────────────────────────
++# The URL comes from a user. Without this check "import recipe" could be pointed at
++# http://db:5432, http://ollama:11434, cloud metadata (169.254.169.254) and so on.
++# Set ALLOW_PRIVATE_URLS=1 only for local testing.
++
++async def assert_public_url(url: str) -> None:
++    parts = urlsplit(str(url))
++    if parts.scheme not in ("http", "https") or not parts.hostname:
++        raise HTTPException(status_code=400, detail="Only http(s) links can be imported")
++    if os.getenv("ALLOW_PRIVATE_URLS") == "1":
++        return
++    try:
++        infos = await asyncio.get_running_loop().getaddrinfo(parts.hostname, parts.port or 443, type=socket.SOCK_STREAM)
++    except socket.gaierror:
++        raise HTTPException(status_code=400, detail="That site could not be found")
++    for info in infos:
++        ip = ipaddress.ip_address(info[4][0])
++        if not ip.is_global:
++            raise HTTPException(status_code=400, detail="That address is not a public website")
++
++
++async def _check_request(request: httpx.Request) -> None:
++    await assert_public_url(str(request.url))      # runs again for every redirect
++
++
++MAX_PAGE_BYTES = 3 * 1024 * 1024
++
++
+ def find_jsonld_recipe(soup: BeautifulSoup) -> Optional[dict]:
+     """Most recipe sites embed schema.org Recipe data. It's far more reliable than page text."""
+     def walk(node):
+@@ -764,22 +796,30 @@ class RecipeParser:
+     
+     async def fetch_webpage(self, url: str) -> dict:
+         """Fetch and extract text content from webpage"""
+-        async with httpx.AsyncClient(timeout=30.0) as client:
++        async with httpx.AsyncClient(timeout=30.0, max_redirects=5,
++                                     event_hooks={"request": [_check_request]}) as client:
+             try:
+-                response = await client.get(
++                async with client.stream(
++                    "GET",
+                     str(url),
+                     headers={
+                         "User-Agent": "Mozilla/5.0 (compatible; RecipeParser/1.0)",
+                         "Accept": "text/html,application/xhtml+xml"
+                     },
+                     follow_redirects=True
+-                )
+-                response.raise_for_status()
+-                
+-                html_content = response.text
+-                
++                ) as response:
++                    response.raise_for_status()
++                    body = b""
++                    async for chunk in response.aiter_bytes():
++                        body += chunk
++                        if len(body) > MAX_PAGE_BYTES:      # a recipe page is never this big
++                            break
++                    html_content = body.decode(response.encoding or "utf-8", errors="replace")
++
+                 return await self.extract_recipe_content(html_content)
+-                
++
++            except HTTPException:
++                raise
+             except Exception as e:
+                 logger.error(f"Error fetching webpage: {e}")
+                 raise HTTPException(status_code=400, detail=f"Failed to fetch webpage: {str(e)}")
+diff --git a/src/api/follow_user.php b/src/api/follow_user.php
+index e131cd0..c3080d3 100644
+--- a/src/api/follow_user.php
++++ b/src/api/follow_user.php
+@@ -1,4 +1,5 @@
+ <?php 
++require_once __DIR__ . '/../includes/json_response.php';   // JSON content type (see the file)
+ require_once __DIR__ . '/../includes/session.php';
+ require_once __DIR__ . '/../includes/follow_check.php';
+ require_once __DIR__ . '/../includes/db.php';
+diff --git a/src/api/get_tags.php b/src/api/get_tags.php
+index eb7102d..a8fb94a 100644
+--- a/src/api/get_tags.php
++++ b/src/api/get_tags.php
+@@ -1,4 +1,5 @@
+ <?php
++require_once __DIR__ . '/../includes/json_response.php';   // JSON content type (see the file)
+ header('Content-Type: application/json');
+ require __DIR__ . '/../includes/db.php';
+ 
+diff --git a/src/api/groups/group_members.php b/src/api/groups/group_members.php
+index d9c6784..d824ed9 100644
+--- a/src/api/groups/group_members.php
++++ b/src/api/groups/group_members.php
+@@ -1,4 +1,5 @@
+ <?php
++require_once __DIR__ . '/../../includes/json_response.php';   // JSON content type (see the file)
+ require_once __DIR__ . '/../../includes/db.php';
+ 
+ $request_method = $_SERVER['REQUEST_METHOD'];
+diff --git a/src/api/groups/group_recipes.php b/src/api/groups/group_recipes.php
+index d9c6784..d824ed9 100644
+--- a/src/api/groups/group_recipes.php
++++ b/src/api/groups/group_recipes.php
+@@ -1,4 +1,5 @@
+ <?php
++require_once __DIR__ . '/../../includes/json_response.php';   // JSON content type (see the file)
+ require_once __DIR__ . '/../../includes/db.php';
+ 
+ $request_method = $_SERVER['REQUEST_METHOD'];
+diff --git a/src/api/groups/groups.php b/src/api/groups/groups.php
+index f89b6b6..1fb2e39 100644
+--- a/src/api/groups/groups.php
++++ b/src/api/groups/groups.php
+@@ -1,4 +1,5 @@
+ <?php
++require_once __DIR__ . '/../../includes/json_response.php';   // JSON content type (see the file)
+ require_once __DIR__ . '/../../includes/db.php';
+ require_once __DIR__ . '/../../includes/session.php';
+ 
+diff --git a/src/api/groups/invitations.php b/src/api/groups/invitations.php
+index 883ed6f..13cf728 100644
+--- a/src/api/groups/invitations.php
++++ b/src/api/groups/invitations.php
+@@ -1,4 +1,5 @@
+ <?php
++require_once __DIR__ . '/../../includes/json_response.php';   // JSON content type (see the file)
+ require_once __DIR__ . '/../../includes/db.php';
+ require_once __DIR__ . '/../../includes/session.php';
+ 
+diff --git a/src/api/meta_data.php b/src/api/meta_data.php
+index b3d4bc2..a586bc0 100644
+--- a/src/api/meta_data.php
++++ b/src/api/meta_data.php
+@@ -1,4 +1,5 @@
+ <?php
++require_once __DIR__ . '/../includes/json_response.php';   // JSON content type (see the file)
+ require __DIR__ . '/../includes/db.php';
+ require __DIR__ . '/../includes/session.php';
+ 
+diff --git a/src/api/mutual_follows.php b/src/api/mutual_follows.php
+index 41ec4e0..43ae665 100644
+--- a/src/api/mutual_follows.php
++++ b/src/api/mutual_follows.php
+@@ -1,4 +1,5 @@
+ <?php
++require_once __DIR__ . '/../includes/json_response.php';   // JSON content type (see the file)
+ require_once __DIR__ . '/../includes/db.php';
+ require_once __DIR__ . '/../includes/session.php';
+ 
+diff --git a/src/api/recipes/add_recipe.php b/src/api/recipes/add_recipe.php
+index 685e503..65d7329 100644
+--- a/src/api/recipes/add_recipe.php
++++ b/src/api/recipes/add_recipe.php
+@@ -1,4 +1,5 @@
+ <?php
++require_once __DIR__ . '/../../includes/json_response.php';   // JSON content type (see the file)
+ 
+ require_once __DIR__ . '/../../includes/db.php';
+ require_once __DIR__ . '/../../includes/require_login.php';
+@@ -8,6 +9,20 @@ require_once __DIR__ . '/../../includes/helpers/recipe_helper.php';
+ 
+ $input = fetchRecipeInput();
+ 
++// Too big for PHP: every field arrived empty, so there is nothing to save. Say why.
++if ($tooLarge = requestTooLargeMessage()) {
++    http_response_code(413);
++    echo json_encode(['success' => false, 'field' => 'picture', 'error' => $tooLarge]);
++    exit;
++}
++
++// A photo that can't be used never blocks the recipe: save without it and say why.
++// (The browser normally refuses it when it's chosen, see assets/photo-check.js.)
++$photoError = checkImageUpload($input['picture']);
++if ($photoError) {
++    $input['picture'] = null;
++}
++
+ 
+ // echo "Input data received: " . json_encode($input) . "\n"; // Debugging line
+ 
+@@ -26,16 +41,23 @@ $recipeId = addRecipe([
+     'tags' => $input['tags'] ?? []
+ ]);
+ 
+-$recipePicture = null;
+-if ($input['picture'] && !empty($input['picture']['name']) && $input['picture']['error'] === UPLOAD_ERR_OK) {
+-    $recipePicture = processRecipeImage(null, $input['picture'], $recipeId, "recipe");
++if (!$recipeId) {
++    exit;   // addRecipe() already sent a 500 with the error
+ }
+ 
+-$db = db();
+-$updateStmt = $db->prepare("UPDATE recipes SET image_base = :image_base WHERE id = :id");
+-$updateStmt->execute([
+-    ':image_base' => $recipePicture,
+-    ':id' => $recipeId
+-]);
++// processRecipeImage() checks the upload itself (error code, size, real image type)
++$recipePicture = processRecipeImage(null, $input['picture'], $recipeId, "recipe");
++if ($recipePicture) {
++    db()->prepare("UPDATE recipes SET image_base = :image_base WHERE id = :id")
++        ->execute([':image_base' => $recipePicture, ':id' => $recipeId]);
++}
++
++// Tell the person when their photo wasn't used, instead of quietly saving without it
++$warning = null;
++if ($photoError) {
++    $warning = "Recipe saved without a photo. $photoError";
++} elseif (photoWasSent($input['picture']) && !$recipePicture) {
++    $warning = 'Recipe saved without a photo: it could not be processed. Edit the recipe to try another one.';
++}
+ 
+-echo json_encode(['success' => true, 'recipe_id' => $recipeId]);
+\ No newline at end of file
++echo json_encode(['success' => true, 'recipe_id' => $recipeId, 'warning' => $warning]);
+\ No newline at end of file
+diff --git a/src/api/recipes/delete_recipe.php b/src/api/recipes/delete_recipe.php
+index c815b8f..7b59d8f 100644
+--- a/src/api/recipes/delete_recipe.php
++++ b/src/api/recipes/delete_recipe.php
+@@ -1,6 +1,8 @@
+ <?php
++require_once __DIR__ . '/../../includes/json_response.php';   // JSON content type (see the file)
+ require_once __DIR__ . '/../../includes/db.php';
+ require_once __DIR__ . '/../../includes/require_login.php';
++require_once __DIR__ . '/../../includes/upload_image.php';
+ 
+ $recipe_id = $_GET['recipe_id'] ?? null; 
+ 
+@@ -8,7 +10,7 @@ $validated_recipe_id = filter_var($recipe_id, FILTER_VALIDATE_INT);
+ 
+ if (!$validated_recipe_id) {
+     http_response_code(400);
+-    echo json_encode(['error' => 'Invalid recipe ID', 'id' => $recipe_id]);
++    echo json_encode(['error' => 'Invalid recipe ID']);   // don't echo the raw input back
+     exit;
+ }
+ 
+@@ -16,7 +18,7 @@ $db = db();
+ $user_id = $_SESSION['user_id'];
+ 
+ try {
+-    $stmt = $db->prepare("SELECT owner_id FROM recipes WHERE id = :recipe_id");
++    $stmt = $db->prepare("SELECT owner_id, image_base FROM recipes WHERE id = :recipe_id");
+     $stmt->bindValue(':recipe_id', $validated_recipe_id, PDO::PARAM_INT);
+     $stmt->execute();
+     $recipe = $stmt->fetch(PDO::FETCH_ASSOC);
+@@ -33,8 +35,10 @@ try {
+     $stmt = $db->prepare("DELETE FROM recipes WHERE id = :recipe_id");
+     $stmt->bindValue(':recipe_id', $validated_recipe_id, PDO::PARAM_INT);
+     $stmt->execute();
++    deleteImageFiles('recipe', $recipe['image_base']);
+     echo json_encode(['success' => true]);
+ } catch (Throwable $e) {
++    error_log('Delete recipe failed: ' . $e->getMessage());
+     http_response_code(500);
+-    echo json_encode(['error' => 'Failed to delete recipe', 'message' => $e->getMessage()]);
++    echo json_encode(['error' => 'Failed to delete recipe']);
+ }
+\ No newline at end of file
+diff --git a/src/api/recipes/fetch_recipes.php b/src/api/recipes/fetch_recipes.php
+index e822feb..e604973 100644
+--- a/src/api/recipes/fetch_recipes.php
++++ b/src/api/recipes/fetch_recipes.php
+@@ -1,4 +1,5 @@
+ <?php 
++require_once __DIR__ . '/../../includes/json_response.php';   // JSON content type (see the file)
+ 
+ require_once __DIR__ . '/../../includes/db.php';
+ require_once __DIR__ . '/../../includes/recipe_fetcher.php';
+diff --git a/src/api/recipes/import_recipe_url.php b/src/api/recipes/import_recipe_url.php
+index 2763705..3127bbc 100644
+--- a/src/api/recipes/import_recipe_url.php
++++ b/src/api/recipes/import_recipe_url.php
+@@ -1,4 +1,5 @@
+ <?php
++require_once __DIR__ . '/../../includes/json_response.php';   // JSON content type (see the file)
+ require_once __DIR__ . '/../../includes/require_login.php';     // imports run the LLM: logged-in users only
+ require_once __DIR__ . '/../../includes/db.php';
+ require_once __DIR__ . '/../../includes/recipe_adder.php';
+diff --git a/src/api/recipes/register_view.php b/src/api/recipes/register_view.php
+index 7d9f9d3..ac66936 100644
+--- a/src/api/recipes/register_view.php
++++ b/src/api/recipes/register_view.php
+@@ -1,4 +1,5 @@
+ <?php
++require_once __DIR__ . '/../../includes/json_response.php';   // JSON content type (see the file)
+ require_once __DIR__ . '/../../includes/db.php';
+ require_once __DIR__ . '/../../includes/session.php';
+ 
+diff --git a/src/api/recipes/save_recipe.php b/src/api/recipes/save_recipe.php
+index e1f83f7..021a6e5 100644
+--- a/src/api/recipes/save_recipe.php
++++ b/src/api/recipes/save_recipe.php
+@@ -1,4 +1,5 @@
+ <?php
++require_once __DIR__ . '/../../includes/json_response.php';   // JSON content type (see the file)
+ require_once __DIR__ . '/../../includes/db.php';
+ require_once __DIR__ . '/../../includes/session.php';
+ 
+diff --git a/src/api/recipes/update_recipe.php b/src/api/recipes/update_recipe.php
+index 7fc6919..8b35e4b 100644
+--- a/src/api/recipes/update_recipe.php
++++ b/src/api/recipes/update_recipe.php
+@@ -1,4 +1,5 @@
+ <?php
++require_once __DIR__ . '/../../includes/json_response.php';   // JSON content type (see the file)
+ require_once __DIR__ . '/../../includes/require_login.php';
+ require_once __DIR__ . '/../../includes/db.php';
+ require_once __DIR__ . '/../../includes/upload_image.php';
+@@ -16,7 +17,7 @@ $db = db();
+ $user_id = $_SESSION['user_id'];
+ 
+ // Verify recipe exists and belongs to the current user
+-$stmt = $db->prepare("SELECT owner_id FROM recipes WHERE id = :recipe_id");
++$stmt = $db->prepare("SELECT owner_id, image_base FROM recipes WHERE id = :recipe_id");
+ $stmt->bindValue(':recipe_id', $recipe_id, PDO::PARAM_INT);
+ $stmt->execute();
+ $recipe = $stmt->fetch(PDO::FETCH_ASSOC);
+@@ -35,11 +36,21 @@ if ($recipe['owner_id'] != $user_id) {
+ 
+ $input = fetchRecipeInput();
+ 
+-$recipePicture = null;
+-if ($input['picture'] && !empty($input['picture']['name']) && $input['picture']['error'] === UPLOAD_ERR_OK) {
+-    $recipePicture = processRecipeImage(null, $input['picture'], null, "recipe");
++if ($tooLarge = requestTooLargeMessage()) {   // every field arrived empty: nothing to save
++    http_response_code(413);
++    echo json_encode(['success' => false, 'field' => 'picture', 'error' => $tooLarge]);
++    exit;
++}
++
++// A photo that can't be used never blocks the save: keep the old photo and say why
++$photoError = checkImageUpload($input['picture']);
++if ($photoError) {
++    $input['picture'] = null;
+ }
+ 
++// Was saved as "recipe_.webp" (no id), so every edited recipe shared, and overwrote, one picture
++$recipePicture = processRecipeImage(null, $input['picture'], $recipe_id, "recipe");
++
+ $db->beginTransaction();
+ 
+ try {
+@@ -93,10 +104,22 @@ try {
+ 
+     $db->commit();
+ 
+-    echo json_encode(['success' => true]);
++    if ($recipePicture !== null) {
++        deleteImageFiles('recipe', $recipe['image_base']);   // the old picture is no longer used
++    }
++
++    $warning = null;
++    if ($photoError) {
++        $warning = "Changes saved, but not the new photo. $photoError";
++    } elseif (photoWasSent($input['picture']) && $recipePicture === null) {
++        $warning = 'Changes saved, but the new photo could not be processed. The old photo is still used.';
++    }
++    echo json_encode(['success' => true, 'warning' => $warning]);
+ 
+ } catch (Throwable $e) {
+     $db->rollback();
++    deleteImageFiles('recipe', $recipePicture);              // the new picture never got saved
++    error_log('Update recipe failed: ' . $e->getMessage());
+     http_response_code(500);
+-    echo json_encode(['error' => 'Failed to update recipe: ' . $e->getMessage()]);
++    echo json_encode(['error' => 'Failed to update recipe']);
+ }
+\ No newline at end of file
+diff --git a/src/api/search.php b/src/api/search.php
+index 4f1f2b0..36e80f4 100644
+--- a/src/api/search.php
++++ b/src/api/search.php
+@@ -1,4 +1,5 @@
+ <?php
++require_once __DIR__ . '/../includes/json_response.php';   // JSON content type (see the file)
+ require_once '../includes/db.php';
+ require_once '../includes/recipe_fetcher.php';
+ 
+diff --git a/src/api/search_ingredients.php b/src/api/search_ingredients.php
+index 9b97093..3d5c5f7 100644
+--- a/src/api/search_ingredients.php
++++ b/src/api/search_ingredients.php
+@@ -1,4 +1,5 @@
+ <?php
++require_once __DIR__ . '/../includes/json_response.php';   // JSON content type (see the file)
+ require_once '../includes/db.php';
+ 
+ header('Content-Type: application/json; charset=utf-8');
+diff --git a/src/api/search_tags.php b/src/api/search_tags.php
+index bf66e73..009c467 100644
+--- a/src/api/search_tags.php
++++ b/src/api/search_tags.php
+@@ -1,4 +1,5 @@
+ <?php
++require_once __DIR__ . '/../includes/json_response.php';   // JSON content type (see the file)
+ require_once '../includes/db.php';
+ require_once '../includes/helpers/recipe_helper.php';
+ 
+diff --git a/src/api/shopping/shopping_common.php b/src/api/shopping/shopping_common.php
+index edae76f..e9e63d2 100644
+--- a/src/api/shopping/shopping_common.php
++++ b/src/api/shopping/shopping_common.php
+@@ -1,4 +1,5 @@
+ <?php
++require_once __DIR__ . '/../../includes/json_response.php';   // JSON content type (see the file)
+ // Shared by shopping_lists.php and shopping_items.php
+ require_once __DIR__ . '/../../includes/session.php';
+ require_once __DIR__ . '/../../includes/db.php';
+diff --git a/src/api/shopping/shopping_items.php b/src/api/shopping/shopping_items.php
+index 4a2e11c..3e4d892 100644
+--- a/src/api/shopping/shopping_items.php
++++ b/src/api/shopping/shopping_items.php
+@@ -1,4 +1,5 @@
+ <?php
++require_once __DIR__ . '/../../includes/json_response.php';   // JSON content type (see the file)
+ require_once __DIR__ . '/shopping_common.php';
+ 
+ /** Only the fields the client actually sent, validated. A missing key means "leave unchanged". */
+diff --git a/src/api/shopping/shopping_lists.php b/src/api/shopping/shopping_lists.php
+index 161080f..958fe1f 100644
+--- a/src/api/shopping/shopping_lists.php
++++ b/src/api/shopping/shopping_lists.php
+@@ -1,4 +1,5 @@
+ <?php
++require_once __DIR__ . '/../../includes/json_response.php';   // JSON content type (see the file)
+ require_once __DIR__ . '/shopping_common.php';
+ 
+ /** Only the owner may share or unshare a list. */
+diff --git a/src/assets/add-recipe.js b/src/assets/add-recipe.js
+index d12123d..5df6016 100644
+--- a/src/assets/add-recipe.js
++++ b/src/assets/add-recipe.js
+@@ -1,6 +1,7 @@
+ import { toggleHidden } from "./recipe-data.js";
+ import { addIngredient, addStep, addIngredientSection, addStepSection } from "./sections.js";
+ import { toast } from './toast.js';
++import { showPhotoError } from './drag-and-drop.js';
+ 
+ let lastSelectedIngredientSection = null;
+ let lastSelectedIngredientItem = null;
+@@ -332,25 +333,49 @@ export function setRecipeTimes(form, prepMinutes, cookMinutes) {
+     renderTimeFields(form);
+ }
+ 
++/**
++ * Shared by add, edit and fork: turns the server's answer into messages.
++ * A photo problem (field: "picture") is shown under the photo box, and the form keeps
++ * everything that was typed so the person can choose another photo and save again.
++ * Returns true when the recipe was saved.
++ */
++export async function readSaveResponse(response, failText) {
++    const result = await response.json().catch(() => ({}));
++
++    // nginx refuses very large uploads itself (client_max_body_size) before PHP sees them
++    if (response.status === 413) {
++        result.field = 'picture';
++        result.error = 'The photo is too big. Choose a smaller one.';
++    }
++
++    if (result.field === 'picture') {
++        showPhotoError(result.error);
++        toast.error(result.error);
++        return false;
++    }
++    if (!response.ok || !result.success) {
++        toast.error(result.error || failText);
++        return false;
++    }
++    if (result.warning) toast.info(result.warning, { duration: 8000 });
++    return true;
++}
++
+ export async function handleAddRecipe(e) {
+     e.preventDefault();
+ 
+     const form = e.target;
+-    const formData = new FormData(form);
+-    
+-    const response = await fetch('/api/recipes/add_recipe.php', {
+-        method: 'POST',
+-        body: formData
+-    });
+-    
+-    const result = await response.json();
+-    
+-    if (result.success) {
+-        toast.success('Recipe added successfully');
+-        form.reset();
+-    }
+-    else {
+-        toast.error('Failed to add recipe');
++    try {
++        const response = await fetch('/api/recipes/add_recipe.php', {
++            method: 'POST',
++            body: new FormData(form)
++        });
++        if (await readSaveResponse(response, 'Failed to add recipe')) {
++            toast.success('Recipe added successfully');
++            form.reset();
++        }
++    } catch {
++        toast.error('Could not reach the server. Your recipe is still in the form, try again.');
+     }
+ }
+ 
+diff --git a/src/assets/drag-and-drop.js b/src/assets/drag-and-drop.js
+index 75ba0a7..6b34f6b 100644
+--- a/src/assets/drag-and-drop.js
++++ b/src/assets/drag-and-drop.js
+@@ -1,10 +1,17 @@
++// assets/drag-and-drop.js
++// The photo box in the add/edit recipe form: click or drop a photo, see a preview.
++// Every photo is checked first (photo-check.js). One that won't work is refused with a
++// message right under the box, and the photo that was there before stays.
++
++import { checkPhoto, rulesFrom, showPhotoMessage } from './photo-check.js';
++
+ let fileInput = null;
+ let uploadBox = null;
+ let preview = null;
+ let uploadContent = null;
+ let uploadLabel = null;
+-
+-console.log("drag-and-drop.js loaded");
++let message = null;
++let acceptedFiles = null;   // the last photo that passed, to put back if a new one is refused
+ 
+ export function init(targetElement) {
+     fileInput = targetElement.querySelector('#picture');
+@@ -12,55 +19,117 @@ export function init(targetElement) {
+     preview = targetElement.querySelector('#preview');
+     uploadContent = targetElement.querySelector('#uploadContent');
+     uploadLabel = targetElement.querySelector('.upload-label');
++    message = targetElement.querySelector('#photo-message');
++    if (!fileInput || !uploadBox || uploadBox.dataset.bound) return;
++    uploadBox.dataset.bound = '1';
+ 
+-    console.log("uploadbox: ", uploadBox);
++    fileInput.addEventListener('change', () => usePhoto(fileInput.files));
+ 
+-    fileInput.addEventListener("change", handleFile);
+-    
+-    uploadBox.addEventListener("dragover", (e) => {
++    uploadBox.addEventListener('dragover', (e) => {
+         e.preventDefault();
+-        uploadLabel.classList.add("dragover");
++        uploadLabel.classList.add('dragover');
+     });
+-    
+-    uploadBox.addEventListener("dragleave", () => {
+-        uploadLabel.classList.remove("dragover");
++
++    uploadBox.addEventListener('dragleave', () => {
++        uploadLabel.classList.remove('dragover');
+     });
+-    
+-    uploadBox.addEventListener("drop", (e) => {
++
++    uploadBox.addEventListener('drop', (e) => {
+         e.preventDefault();
+-        uploadLabel.classList.remove("dragover");
+-    
+-        const file = e.dataTransfer.files[0];
+-        if (file) {
+-            fileInput.files = e.dataTransfer.files;
+-            showPreview(file);
++        uploadLabel.classList.remove('dragover');
++        if (e.dataTransfer.files.length > 1) {
++            showPhotoMessage(message, { error: 'Drop one photo at a time.' });
++            return;
+         }
++        usePhoto(e.dataTransfer.files);
+     });
+-};
+ 
++    // A fresh form (after saving, or opened again for a new recipe) starts without a photo or message
++    fileInput.form?.addEventListener('reset', () => clearPhoto());
++}
++
++async function usePhoto(files) {
++    const file = files?.[0];
++    if (!file) return;
++
++    uploadBox.classList.add('is-checking');
++    const result = await checkPhoto(file, rulesFrom(uploadBox));
++    uploadBox.classList.remove('is-checking');
++    if (result.error) {
++        // A photo already in the box (chosen earlier, or the saved one when editing) stays
++        result.error += preview.classList.contains('hidden')
++            ? ' You can still save the recipe without a photo.'
++            : ' The current photo is kept.';
++    }
++
++    showPhotoMessage(message, result);
++    uploadBox.classList.toggle('is-invalid', !result.ok);
+ 
+-function handleFile() {
+-    const file = fileInput.files[0];
+-    if (file) {
+-        showPreview(file);
++    if (!result.ok) {
++        // Put back what was there before, so a refused photo never gets sent with the form
++        restoreFiles(acceptedFiles);
++        return;
++    }
++
++    restoreFiles(files);          // needed for drops: the input doesn't hold dropped files by itself
++    acceptedFiles = files;
++    showPreview(file);
++}
++
++function restoreFiles(files) {
++    try {
++        if (files) {
++            const transfer = new DataTransfer();
++            transfer.items.add(files[0]);
++            fileInput.files = transfer.files;
++        } else {
++            fileInput.value = '';
++        }
++    } catch {
++        fileInput.value = '';     // very old browsers can't set files: send no photo rather than a bad one
+     }
+ }
+ 
+ function showPreview(file) {
+-    const reader = new FileReader();
++    const url = URL.createObjectURL(file);
++    preview.onload = () => URL.revokeObjectURL(url);
++    preview.src = url;
++    preview.classList.remove('hidden');
++    uploadContent.classList.add('hidden');
++}
+ 
+-    reader.onload = (e) => {
+-        preview.src = e.target.result;
+-        preview.classList.remove("hidden");
+-        uploadContent.classList.add("hidden");
+-    };
++function clearPhoto() {
++    acceptedFiles = null;
++    preview.removeAttribute('src');
++    preview.classList.add('hidden');
++    uploadContent.classList.remove('hidden');
++    uploadBox.classList.remove('is-invalid');
++    showPhotoMessage(message, null);
++}
+ 
+-    reader.readAsDataURL(file);
++/** Server said the photo can't be used (a check the browser can't do, or an old browser). */
++export function showPhotoError(text) {
++    if (!uploadBox) return;
++    restoreFiles(null);
++    acceptedFiles = null;
++    preview.removeAttribute('src');                 // don't keep showing the photo that was refused
++    preview.classList.add('hidden');
++    uploadContent.classList.remove('hidden');
++    uploadBox.classList.add('is-invalid');
++    showPhotoMessage(message, { error: text });
++    uploadBox.scrollIntoView({ behavior: 'smooth', block: 'center' });
+ }
+ 
+ export function showLoadedpreview(imageUrl) {
+-    if (!imageUrl) return;
++    if (!preview) return;
++    showPhotoMessage(message, null);
++    uploadBox?.classList.remove('is-invalid');
++    if (!imageUrl) {
++        preview.classList.add('hidden');
++        uploadContent.classList.remove('hidden');
++        return;
++    }
+     preview.src = imageUrl;
+-    preview.classList.remove("hidden");
+-    uploadContent.classList.add("hidden");
++    preview.classList.remove('hidden');
++    uploadContent.classList.add('hidden');
+ }
+diff --git a/src/assets/edit-recipe.js b/src/assets/edit-recipe.js
+index b42c8cf..a45e88e 100644
+--- a/src/assets/edit-recipe.js
++++ b/src/assets/edit-recipe.js
+@@ -2,7 +2,7 @@ import { fillEditList } from './sections.js';
+ import { parseJson, fetchRecipeById } from './recipe-data.js'
+ import { showLoadedpreview } from './drag-and-drop.js';
+ import { toast } from './toast.js';
+-import { setRecipeTimes } from './add-recipe.js';
++import { setRecipeTimes, readSaveResponse } from './add-recipe.js';
+ 
+ let addForm = null;
+ 
+@@ -84,12 +84,11 @@ export async function submitEdit(e) {
+             method: 'POST',
+             body: formData
+         });
+-        const result = await response.json();
+-        if (!response.ok) throw new Error(result.error || 'Failed to update recipe');
++        if (!await readSaveResponse(response, 'Failed to update recipe')) return;   // form stays open to fix
+ 
+         document.getElementById('add-menu').classList.toggle("hidden");
+         toast.success('Recipe updated successfully');
+     } catch (error) {
+-        toast.error('Failed to update recipe');
++        toast.error('Could not reach the server. Your changes are still in the form, try again.');
+     }
+ }
+\ No newline at end of file
+diff --git a/src/assets/fork-recipe.js b/src/assets/fork-recipe.js
+index bf2675b..f14d5c6 100644
+--- a/src/assets/fork-recipe.js
++++ b/src/assets/fork-recipe.js
+@@ -1,4 +1,4 @@
+-import { handleAddRecipe } from './add-recipe.js';
++import { handleAddRecipe, readSaveResponse } from './add-recipe.js';
+ import { toast } from './toast.js';
+ import { grabAndDisplayEdit } from './edit-recipe.js';
+ 
+@@ -21,12 +21,11 @@ export async function submitFork(e) {
+             method: 'POST',
+             body: formData
+         });
+-        const result = await response.json();
+-        if (!response.ok) throw new Error(result.error || 'Failed to fork recipe');
++        if (!await readSaveResponse(response, 'Failed to fork recipe')) return;   // form stays open to fix
+ 
+         document.getElementById('add-menu').classList.toggle("hidden");
+         toast.success('Recipe forked successfully');
+     } catch (error) {
+-        toast.error('Failed to fork recipe');
++        toast.error('Could not reach the server. Your recipe is still in the form, try again.');
+     }
+ }
+\ No newline at end of file
+diff --git a/src/assets/landing-page.js b/src/assets/landing-page.js
+index 4f32c51..e83ae6e 100644
+--- a/src/assets/landing-page.js
++++ b/src/assets/landing-page.js
+@@ -1,3 +1,5 @@
++import { guardFileInput, showPhotoMessage } from './photo-check.js';
++
+ let loginModal = null;
+ let loginModalExpanded = false;
+ let personalRecipeButton = null;
+@@ -14,19 +16,30 @@ export function init(targetElement) {
+ 
+     initEventListeners();
+     const signupForm = targetElement.querySelector('#signup-form');
+-    
++    const photoInput = signupForm.querySelector('input[type="file"]');
++    const photoMessage = signupForm.querySelector('#signup-photo-message');
++    // A photo that won't work is refused as soon as it's chosen; signing up without one is fine
++    guardFileInput(photoInput, photoMessage, 'You can still sign up without one.');
++
+     signupForm.addEventListener('submit', async (e) => {
+         e.preventDefault();
+-        const formData = new FormData(signupForm);
+         const response = await fetch('/auth/signup.php', {
+             method: 'POST',
+-            body: formData
++            body: new FormData(signupForm)
+         });
+ 
+         if (response.ok) {
+-            // window.location.href = '/';
++            window.location.href = '/';
++            return;
++        }
++        // signup.php answers with a plain sentence (bad username, short password, photo problem...)
++        const reason = (await response.text()).trim() || 'Sign-up failed. Check the form and try again.';
++        if (response.status === 413 || /photo/i.test(reason)) {
++            photoInput.value = '';
++            showPhotoMessage(photoMessage, { error: reason });
+         } else {
+-            alert('Signup failed');
++            showPhotoMessage(photoMessage, null);
++            alert(reason);
+         }
+     });
+ };
+diff --git a/src/assets/photo-check.js b/src/assets/photo-check.js
+new file mode 100644
+index 0000000..55eb365
+--- /dev/null
++++ b/src/assets/photo-check.js
+@@ -0,0 +1,114 @@
++// assets/photo-check.js
++//
++// Checks a photo the moment it's chosen or dropped, so the person hears straight away
++// that it won't work (and why) instead of finding the recipe saved without it.
++// The limits come from the page (data- attributes printed by modules.php from
++// includes/upload_image.php), so browser and server always agree. The server checks again.
++
++const TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
++const NAMES = /\.(jpe?g|png|webp|gif)$/i;
++const HEIC  = /\.(heic|heif)$/i;
++
++const DEFAULTS = { maxBytes: 8 * 1024 * 1024, maxPixels: 40_000_000, minSide: 300 };
++
++/** Read the limits from an element's data- attributes (falls back to the defaults). */
++export function rulesFrom(element) {
++    const d = element?.dataset ?? {};
++    return {
++        maxBytes:  Number(d.maxBytes)  || DEFAULTS.maxBytes,
++        maxPixels: Number(d.maxPixels) || DEFAULTS.maxPixels,
++        minSide:   Number(d.minSide)   || DEFAULTS.minSide,
++    };
++}
++
++const mb = bytes => (bytes / 1024 / 1024).toFixed(1).replace(/\.0$/, '');
++
++/**
++ * @returns {Promise<{ok: boolean, error?: string, warning?: string, width?: number, height?: number}>}
++ */
++export async function checkPhoto(file, rules = DEFAULTS) {
++    if (!file) return { ok: false, error: 'No photo was chosen.' };
++
++    if (HEIC.test(file.name) || /hei[cf]/i.test(file.type)) {
++        return { ok: false, error: 'iPhone HEIC photos can’t be used yet. Save it as JPG (or set the camera to “Most Compatible”) and try again.' };
++    }
++    // Some systems leave file.type empty, so the file name counts too
++    if (!TYPES.includes(file.type) && !NAMES.test(file.name)) {
++        return { ok: false, error: 'That isn’t a supported picture. Use a JPG, PNG, WEBP or GIF.' };
++    }
++    if (file.size > rules.maxBytes) {
++        return { ok: false, error: `The photo is ${mb(file.size)} MB. Choose one under ${mb(rules.maxBytes)} MB.` };
++    }
++    if (file.size === 0) {
++        return { ok: false, error: 'That file is empty. Choose the photo again.' };
++    }
++
++    // Actually open it: catches renamed files and damaged downloads
++    let size;
++    try {
++        size = await imageSize(file);
++    } catch {
++        return { ok: false, error: 'That file can’t be opened as a picture. It may be damaged. Try another photo.' };
++    }
++
++    const { width, height } = size;
++    if (width * height > rules.maxPixels) {
++        return { ok: false, width, height,
++            error: `The photo is ${width} × ${height} pixels, too large to process. Use one under ${Math.round(rules.maxPixels / 1e6)} megapixels.` };
++    }
++    if (Math.min(width, height) < rules.minSide) {
++        return { ok: true, width, height,
++            warning: `This photo is small (${width} × ${height}) and may look blurry. A larger one will look better.` };
++    }
++    return { ok: true, width, height };
++}
++
++async function imageSize(file) {
++    if ('createImageBitmap' in window) {
++        const bitmap = await createImageBitmap(file);
++        const size = { width: bitmap.width, height: bitmap.height };
++        bitmap.close?.();
++        return size;
++    }
++    const url = URL.createObjectURL(file);
++    try {
++        return await new Promise((resolve, reject) => {
++            const img = new Image();
++            img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight });
++            img.onerror = reject;
++            img.src = url;
++        });
++    } finally {
++        URL.revokeObjectURL(url);
++    }
++}
++
++/**
++ * Show a check result next to the photo field.
++ * messageEl: an element with role="alert" (hidden when there is nothing to say).
++ */
++export function showPhotoMessage(messageEl, result) {
++    if (!messageEl) return;
++    const text = result?.error || result?.warning || '';
++    messageEl.textContent = text;
++    messageEl.hidden = !text;
++    messageEl.classList.toggle('is-error', !!result?.error);
++    messageEl.classList.toggle('is-warning', !result?.error && !!result?.warning);
++}
++
++/**
++ * For a plain <input type="file"> (e.g. the sign-up form): check on change, clear it if it
++ * won't work. Returns nothing; the input stays empty until a usable photo is chosen.
++ */
++export function guardFileInput(input, messageEl, afterError = '') {
++    if (!input || input.dataset.photoChecked) return;
++    input.dataset.photoChecked = '1';
++    input.addEventListener('change', async () => {
++        const file = input.files[0];
++        if (!file) { showPhotoMessage(messageEl, null); return; }
++        const result = await checkPhoto(file, rulesFrom(input));
++        if (result.error && afterError) result.error += ' ' + afterError;
++        showPhotoMessage(messageEl, result);
++        if (!result.ok) input.value = '';
++    });
++}
+diff --git a/src/assets/recipe-cards.js b/src/assets/recipe-cards.js
+index 8d16ab1..919d0b7 100644
+--- a/src/assets/recipe-cards.js
++++ b/src/assets/recipe-cards.js
+@@ -4,12 +4,41 @@ export function escapeHtml(value) {
+     })[c]);
+ }
+ 
+-export function getRecipeImage(recipe) {
+-    return recipe.image_base
+-        ? `<img src="/uploads/recipe_pictures/${escapeHtml(recipe.image_base)}.webp" alt="">`
+-        : `<div class="placeholder"><span class="material-symbols-outlined">chef_hat</span></div>`;
++// ── Images ────────────────────────────────────────────────────────────────────
++// includes/upload_image.php saves each picture in a few sizes: recipe "" (1600 px) and "_600",
++// profile "" (512 px) and "_200". Pictures uploaded before that only have the full size, so
++// smaller ones fall back to it (see the error listener below).
++
++export function imageUrl(type, base, size = '') {
++    return `/uploads/${type}_pictures/${encodeURIComponent(base)}${size}.webp`;
++}
++
++/** <img> for a recipe; size "_600" for cards, "" for the full recipe view. */
++export function getRecipeImage(recipe, size = '') {
++    if (!recipe.image_base) {
++        return `<div class="placeholder"><span class="material-symbols-outlined">chef_hat</span></div>`;
++    }
++    const full = imageUrl('recipe', recipe.image_base);
++    return `<img src="${size ? imageUrl('recipe', recipe.image_base, size) : full}"
++                 ${size ? `data-fallback="${full}"` : ''} alt="" loading="lazy" decoding="async">`;
+ }
+ 
++/** Profile picture url (or the generated avatar for people without one). */
++export function avatarUrl(username, imageBase, size = '_200') {
++    return imageBase
++        ? imageUrl('profile', imageBase, size)
++        : `/uploads/profile_pictures/${encodeURIComponent(username)}_avatar.svg`;
++}
++
++// One listener for every image: a missing small size falls back to the full picture
++document.addEventListener('error', (e) => {
++    const img = e.target;
++    if (img instanceof HTMLImageElement && img.dataset.fallback && !img.dataset.fellBack) {
++        img.dataset.fellBack = '1';
++        img.src = img.dataset.fallback;
++    }
++}, true);
++
+ // "dinner", from the course types meta-data-loader.js loaded
+ export function getCourseName(recipe) {
+     const id = Number(recipe.course_types);
+@@ -41,15 +70,14 @@ function getMatchHtml(recipe) {
+ }
+ 
+ export function getRecipeHtml(recipe) {
+-    const ownerImg = recipe.owner_image
+-        ? `${recipe.owner_image}.webp`
+-        : `${recipe.owner_username}_avatar.svg`;
+     const course = getCourseName(recipe);
++    const ownerAvatar = avatarUrl(recipe.owner_username, recipe.owner_image);
++    const ownerFull = avatarUrl(recipe.owner_username, recipe.owner_image, '');
+ 
+     return `
+-        <div class="recipe-card" data-id="${recipe.id}" data-course="${escapeHtml(course)}">
+-            ${recipe.is_owner ? '' : `<img class="owner-image" src="/uploads/profile_pictures/${escapeHtml(ownerImg)}" alt="${escapeHtml(recipe.owner_username)}" title="by ${escapeHtml(recipe.owner_username)}">`}
+-            <div class="recipe-image-container">${getRecipeImage(recipe)}</div>
++        <div class="recipe-card" data-id="${Number(recipe.id)}" data-course="${escapeHtml(course)}">
++            ${recipe.is_owner ? '' : `<img class="owner-image" src="${ownerAvatar}" data-fallback="${ownerFull}" alt="${escapeHtml(recipe.owner_username)}" title="by ${escapeHtml(recipe.owner_username)}" loading="lazy">`}
++            <div class="recipe-image-container">${getRecipeImage(recipe, '_600')}</div>
+             <div class="recipe-content">
+                 <div class="card-meta">
+                     <span>${formatMinutes(recipe.total_time_minutes)}</span>
+@@ -71,14 +99,14 @@ export function getPickHtml(recipe, poolSize = null) {
+ 
+     return `
+         <div class="pick" data-course="${escapeHtml(getCourseName(recipe))}">
+-            <div class="pick-image">${getRecipeImage(recipe)}</div>
++            <div class="pick-image">${getRecipeImage(recipe, '_600')}</div>
+             <div class="in">
+                 <span class="pk">Picked for you</span>
+                 <h2>${escapeHtml(recipe.title)}</h2>
+                 <p class="meta">${facts.map(f => `<span>${escapeHtml(f)}</span>`).join('')}</p>
+                 ${recipe.description ? `<p class="pick-desc">${escapeHtml(recipe.description)}</p>` : ''}
+                 <div class="act">
+-                    <button type="button" class="btn p pick-cook" data-id="${recipe.id}">Cook this</button>
++                    <button type="button" class="btn p pick-cook" data-id="${Number(recipe.id)}">Cook this</button>
+                     <button type="button" class="btn pick-another">Another one</button>
+                 </div>
+             </div>
+diff --git a/src/assets/recipe-modal.js b/src/assets/recipe-modal.js
+index c43d1db..9f10328 100644
+--- a/src/assets/recipe-modal.js
++++ b/src/assets/recipe-modal.js
+@@ -1,10 +1,21 @@
+ import { handleEdit } from './edit-recipe.js';
+-import { escapeHtml, getRecipeImage } from './recipe-cards.js';
++import { escapeHtml, getRecipeImage, avatarUrl } from './recipe-cards.js';
++
+ import { fetchRecipeById, parseJson, groupBySection } from './recipe-data.js';
+ import { toast } from './toast.js';
+ import { confirmDialog } from './dialog.js';
+ import { forkRecipe } from './fork-recipe.js';
+ 
++// Only real web links become clickable: a saved "javascript:..." link would run on click
++function safeHttpUrl(value) {
++    try {
++        const url = new URL(String(value), location.origin);
++        return url.protocol === 'http:' || url.protocol === 'https:' ? url.href : null;
++    } catch {
++        return null;
++    }
++}
++
+ let overlay, expandedModal, expanded = false;
+ 
+ export function init() {
+@@ -221,7 +232,7 @@ function renderIngredients(ingredientsEl, recipeIngredients, recipeSections, cov
+ 
+         return `<div class="ingredient-item">
+             <span class="material-symbols-outlined ingredient-checkbox">circle</span>
+-            <p>${amount} ${unit}${size}${escapeHtml(name)}</p>
++            <p>${escapeHtml(amount)} ${escapeHtml(unit)}${escapeHtml(size)}${escapeHtml(name)}</p>
+             ${badge}
+             <button class="ingredient-add-button" title="Add to shopping list" aria-label="Add to shopping list">
+                 <span class="material-symbols-outlined">add</span>
+@@ -294,34 +305,37 @@ export async function expandRecipe(recipeId) {
+     courseText.textContent = window.metadata.courseTypes.get(recipe.course_types).name;
+ 
+     recipeOwner.innerHTML = `
+-        <a class="recipe-userinfo" href="/user/${escapeHtml(recipe.owner_username)}">
++        <a class="recipe-userinfo" href="/user/${encodeURIComponent(recipe.owner_username)}">
+             <img class="owner-profile-pic"
+-                src="/uploads/profile_pictures/${recipe.owner_image ? recipe.owner_image + '.webp' : recipe.owner_username + '_avatar.svg'}"
+-                alt="Owner Image">
++                src="${avatarUrl(recipe.owner_username, recipe.owner_image)}"
++                data-fallback="${avatarUrl(recipe.owner_username, recipe.owner_image, '')}"
++                alt="">
+             <div>
+                 <h4>Archived by</h4>
+                 <h4 class="recipe-owner-username">${escapeHtml(recipe.owner_username)}</h4>
+             </div>
+     </a>`;
+ 
+-    tags.innerHTML = recipe.recipe_tags ? JSON.parse(recipe.recipe_tags).map(t => `<a href="/results?q=${encodeURIComponent(t.name)}" class="pill">${t.name}</a>`).join('') : '';
++    // Tag names are typed by users: escape them
++    tags.innerHTML = parseJson(recipe.recipe_tags).map(t =>
++        `<a href="/results?q=${encodeURIComponent(t.name)}" class="pill">${escapeHtml(t.name)}</a>`).join('');
+ 
+     // Prep is optional (see the "Split into prep and cook" switch): only show it when it was given
+     const hasPrep = recipe.prep_time_minutes != null && Number(recipe.prep_time_minutes) > 0;
+     time.innerHTML = `
+         ${hasPrep ? `<div class="recipe-time-section">
+             <h5>PREP TIME</h5>
+-            <span>${recipe.prep_time_minutes} Mins</span>
++            <span>${Number(recipe.prep_time_minutes)} Mins</span>
+         </div>
+         <span class="divider"></span>` : ''}
+         <div class="recipe-time-section">
+             <h5>TOTAL TIME</h5>
+-            <span>${recipe.total_time_minutes} Mins</span>
++            <span>${Number(recipe.total_time_minutes) || 0} Mins</span>
+         </div>
+         <span class="divider"></span>
+         <div class="recipe-time-section">
+             <h5>SERVINGS</h5>
+-            <span>${recipe.servings ? recipe.servings + ' Servings' : '1 Serving'}</span>
++            <span>${Number(recipe.servings) > 1 ? Number(recipe.servings) + ' Servings' : '1 Serving'}</span>
+         </div>
+     `;
+         
+@@ -329,7 +343,7 @@ export async function expandRecipe(recipeId) {
+     title.textContent       = recipe.title;
+     description.textContent = recipe.description;
+     image.innerHTML         = getRecipeImage(recipe);
+-    views.innerHTML         = `<span class="material-symbols-outlined">visibility</span><p>${recipe.view_count} views</p>`;
++    views.innerHTML         = `<span class="material-symbols-outlined">visibility</span><p>${Number(recipe.view_count) || 0} views</p>`;
+ 
+     renderSteps(steps, recipe);
+ 
+@@ -340,7 +354,7 @@ export async function expandRecipe(recipeId) {
+                <span class="material-symbols-outlined">bookmark</span>
+                ${recipe.is_saved ? 'Remove from favorites' : 'Save to Favorites'}
+            </button>
+-           ${recipe.link ? `<a href="${recipe.link}" target="_blank" class="external-link-button">
++           ${safeHttpUrl(recipe.link) ? `<a href="${escapeHtml(safeHttpUrl(recipe.link))}" target="_blank" rel="noopener noreferrer nofollow" class="external-link-button">
+                <span class="material-symbols-outlined">open_in_new</span>Open Recipe External Link
+            </a>` : ''}
+            <button class="recipe-action-button" id="fork-recipe-button" data-id="${id}">
+diff --git a/src/assets/redesign.css b/src/assets/redesign.css
+index 2561d57..82c4b4e 100644
+--- a/src/assets/redesign.css
++++ b/src/assets/redesign.css
+@@ -541,6 +541,19 @@ h1, h2, h3,
+ .top2 { display: grid; grid-template-columns: 12rem 1fr; gap: 1.2rem; }
+ .top2 .upload-box { width: 100%; }
+ 
++/* Photo check messages (assets/photo-check.js) */
++.photo-message {
++    margin: .5rem 0 0;
++    padding: .55rem .8rem;
++    border-radius: 10px;
++    font-size: .88rem;
++    line-height: 1.35;
++}
++.photo-message.is-error { background: var(--berry-t); color: var(--berry-d); font-weight: 500; }
++.photo-message.is-warning { background: var(--well); color: var(--ink); }
++.upload-box.is-invalid .upload-label { border-color: var(--berry); }
++.upload-box.is-checking .upload-label { opacity: .6; cursor: progress; }
++
+ .tbox { display: grid; gap: .8rem; padding: 1rem; background: var(--bg); border-radius: 16px; }
+ .tin { display: flex; flex-wrap: wrap; align-items: end; gap: .8rem; }
+ .tin label { display: block; font-size: .8rem; color: var(--mute); }
+diff --git a/src/assets/search.js b/src/assets/search.js
+index b3fefb4..129b3d5 100644
+--- a/src/assets/search.js
++++ b/src/assets/search.js
+@@ -1,4 +1,4 @@
+-import { renderRecipeList } from './recipe-cards.js';
++import { renderRecipeList, escapeHtml, avatarUrl } from './recipe-cards.js';
+ let activeTab = 'all-tab';
+ 
+ async function search(q) {
+@@ -26,12 +26,15 @@ function renderProfiles(profiles) {
+     
+     profiles.forEach(profile => {
+         const profileCard = document.createElement('a');
+-        profileCard.href = `/user/${profile.username}`;
++        profileCard.href = `/user/${encodeURIComponent(profile.username)}`;
+         profileCard.className = 'profile-card';
++        // Username and bio are typed by users: escape everything that goes into the markup
+         profileCard.innerHTML = `
+-            <img src="${profile.image_base ? '/uploads/profile_pictures/' + profile.image_base + '.webp' : '/uploads/profile_pictures/' + profile.username + '_avatar.svg'}" alt="${profile.username}'s avatar" class="profile-avatar">
+-            <h3>${profile.username}</h3>
+-            <p>${profile.bio || ''}</p>
++            <img src="${avatarUrl(profile.username, profile.image_base)}"
++                 data-fallback="${avatarUrl(profile.username, profile.image_base, '')}"
++                 alt="" class="profile-avatar" loading="lazy">
++            <h3>${escapeHtml(profile.username)}</h3>
++            <p>${escapeHtml(profile.bio || '')}</p>
+         `;
+         profileContainer.appendChild(profileCard);
+     });
+diff --git a/src/assets/social-interactions.js b/src/assets/social-interactions.js
+index c58d25e..3aa961e 100644
+--- a/src/assets/social-interactions.js
++++ b/src/assets/social-interactions.js
+@@ -1,4 +1,5 @@
+ import { toast } from './toast.js';
++import { escapeHtml } from './recipe-cards.js';
+ 
+ let inviteModal = null;
+ let badgeCount;
+@@ -192,7 +193,8 @@ async function loadInvitations() {
+         updateBadgeUI(invitations.count);
+         renderInvitations(invitations.invitations);
+     } catch (error) {
+-        inviteModal.innerHTML = '<p>Error loading invitations. Please try again later. ' + error + ' </p>';
++        inviteModal.innerHTML = '<p>Could not load invitations. Please try again later.</p>';
++        console.error(error);
+     }
+ }
+ 
+@@ -208,7 +210,8 @@ async function loadGroups() {
+ 
+         renderGroups(groups.groups);
+     } catch (error) {
+-        document.querySelector('#group-list').innerHTML = '<p>Error loading groups. Please try again later. ' + error + ' </p>';
++        document.querySelector('#group-list').innerHTML = '<p>Could not load groups. Please try again later.</p>';
++        console.error(error);
+     }
+ }
+ 
+@@ -219,8 +222,8 @@ function renderGroups(groups) {
+         const groupElement = document.createElement('div');
+         groupElement.classList.add('group');
+         groupElement.innerHTML = `
+-            <p>${group.group_name}</p>
+-            <button class="leave-group" data-id="${group.id}">Leave</button>
++            <p>${escapeHtml(group.group_name)}</p>
++            <button class="leave-group" data-id="${escapeHtml(group.id)}">Leave</button>
+         `;
+         groupList.appendChild(groupElement);
+     });
+@@ -258,9 +261,9 @@ function renderInvitations(invitations) {
+         const invitationElement = document.createElement('div');
+         invitationElement.classList.add('invitation');
+         invitationElement.innerHTML = `
+-            <p>${invitation.group_name} - Invited by ${invitation.inviter_name}</p>
+-            <button class="accept-invite" data-id="${invitation.invitation_id}">Accept</button>
+-            <button class="decline-invite" data-id="${invitation.invitation_id}">Decline</button>
++            <p>${escapeHtml(invitation.group_name)} - Invited by ${escapeHtml(invitation.inviter_name)}</p>
++            <button class="accept-invite" data-id="${escapeHtml(invitation.invitation_id)}">Accept</button>
++            <button class="decline-invite" data-id="${escapeHtml(invitation.invitation_id)}">Decline</button>
+         `;
+         inviteModal.appendChild(invitationElement);
+     });
+diff --git a/src/assets/theme-init.js b/src/assets/theme-init.js
+new file mode 100644
+index 0000000..2ea2333
+--- /dev/null
++++ b/src/assets/theme-init.js
+@@ -0,0 +1,8 @@
++// assets/theme-init.js
++// Loaded as a plain (blocking) script in <head> by getHeadAssets(), before anything is drawn,
++// so a saved dark theme doesn't flash light first. A file instead of an inline <script>
++// so the Content-Security-Policy can forbid inline scripts (the main defence if XSS ever slips in).
++try {
++    var theme = localStorage.getItem('theme');
++    if (theme) document.documentElement.dataset.theme = theme;
++} catch (e) { /* storage blocked: follow the system setting */ }
+diff --git a/src/assets/users.js b/src/assets/users.js
+index 076b049..047d8dd 100644
+--- a/src/assets/users.js
++++ b/src/assets/users.js
+@@ -1,5 +1,6 @@
+ // import { setCurrentExpanded } from "./popstate.js";
+ import { toast } from './toast.js';
++import { avatarUrl } from './recipe-cards.js';
+ 
+ document.addEventListener('DOMContentLoaded', () => {
+ 
+@@ -53,11 +54,13 @@ function showFollowerList(event) {
+                 const userElement = document.createElement('div');
+                 userElement.className = 'follower-item';
+                 userElement.addEventListener('click', () => {
+-                    window.location.href = `/user/${user.username}`;
++                    window.location.href = `/user/${encodeURIComponent(user.username)}`;
+                 });
+                 list.appendChild(userElement);
+                 const userimg = document.createElement('img');
+-                userimg.src = user.image_base ? `/uploads/profile_pictures/${user.image_base}_200.webp` : `/uploads/profile_pictures/${user.username}_avatar.svg`;
++                userimg.src = avatarUrl(user.username, user.image_base);
++                userimg.dataset.fallback = avatarUrl(user.username, user.image_base, '');   // pictures from before the _200 size existed
++                userimg.loading = 'lazy';
+                 userimg.alt = `${user.username}'s profile picture`;
+                 userimg.className = 'follower-profile-pic';
+                 userElement.appendChild(userimg);
+diff --git a/src/auth/google_callback.php b/src/auth/google_callback.php
+index 680740c..63cd91c 100644
+--- a/src/auth/google_callback.php
++++ b/src/auth/google_callback.php
+@@ -45,14 +45,29 @@ if ($row) {
+         $userId = $user['id'];
+     } else {
+         $userId = uuid_create(UUID_TYPE_RANDOM);
++
++        // Same rules as signup.php: the name is used in file names, URLs and pages
++        $username = substr(preg_replace('/[^A-Za-z0-9_.-]/', '', explode('@', $email)[0]), 0, 24);
++        $username = preg_replace('/^[^A-Za-z0-9]+/', '', $username);
++        if (strlen($username) < 3) $username = 'cook';
++        $taken = $db->prepare("SELECT 1 FROM users WHERE username = :u");
++        $taken->execute([':u' => $username]);
++        if ($taken->fetchColumn()) $username .= '-' . bin2hex(random_bytes(2));
++
+         $db->prepare("
+         INSERT INTO users (id, email, username)
+         VALUES (:id, :email, :username)
+         ")->execute([
+             ':id' => $userId,
+             ':email' => $email,
+-            ':username' => explode('@', $email)[0]
++            ':username' => $username
+         ]);
++
++        // Google sign-ups never got the default avatar, so their picture was a broken image
++        require_once __DIR__ . '/../includes/identicon.php';
++        $dir = __DIR__ . '/../uploads/profile_pictures';
++        if (!is_dir($dir)) mkdir($dir, 0755, true);
++        file_put_contents("$dir/{$username}_avatar.svg", generateIdenticon($email));
+     }
+ 
+     $db->prepare("
+diff --git a/src/auth/signup.php b/src/auth/signup.php
+index 3c0a21a..6b0cbb4 100644
+--- a/src/auth/signup.php
++++ b/src/auth/signup.php
+@@ -10,6 +10,12 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+     exit;
+ }
+ 
++// Too big for PHP: every field arrives empty, which would otherwise look like a missing email
++if ($tooLarge = requestTooLargeMessage()) {
++    http_response_code(413);
++    exit($tooLarge);
++}
++
+ $email = trim($_POST['email'] ?? '');
+ $username = trim($_POST['username'] ?? '');
+ $password = trim($_POST['password'] ?? '');
+@@ -19,13 +25,26 @@ if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+     exit;
+ }
+ 
+-$profilePicture = null;
++// The username ends up in file names, URLs (/user/name) and pages: letters, digits, _ . - only.
++// Before this, "../../x" wrote files outside the uploads folder and "<img onerror=...>" was a valid name.
++if (!preg_match('/^[A-Za-z0-9][A-Za-z0-9_.-]{2,29}$/', $username)) {
++    http_response_code(400);
++    exit('Username: 3-30 letters, numbers, dots, dashes or underscores');
++}
++
++if (strlen($password) < 8) {
++    http_response_code(400);
++    exit('Password: at least 8 characters');
++}
+ 
+-if ($_FILES['picture']['error'] === UPLOAD_ERR_OK) {
+-    $profilePicture = processRecipeImage(null, $_FILES['picture'], $username, "profile");
+-} else {
+-    $avatar = generateIdenticon($email);
+-    file_put_contents("/var/www/html/uploads/profile_pictures/" . $username . "_avatar.svg", $avatar);
++// A bad photo doesn't stop the sign-up: they get the generated avatar (the page already warned them)
++$profilePicture = checkImageUpload($_FILES['picture'] ?? null)
++    ? null
++    : processRecipeImage(null, $_FILES['picture'] ?? null, $username, "profile");
++if (!$profilePicture) {
++    $dir = __DIR__ . '/../uploads/profile_pictures';
++    if (!is_dir($dir)) mkdir($dir, 0755, true);
++    file_put_contents("$dir/{$username}_avatar.svg", generateIdenticon($email));
+ }
+ 
+ $hash = password_hash($password, PASSWORD_DEFAULT);
+diff --git a/src/includes/backfill_image_sizes.php b/src/includes/backfill_image_sizes.php
+new file mode 100644
+index 0000000..8ad2897
+--- /dev/null
++++ b/src/includes/backfill_image_sizes.php
+@@ -0,0 +1,42 @@
++<?php
++/**
++ * One-off: make the smaller sizes (_600 for recipes, _200 for profiles) for pictures uploaded
++ * before upload_image.php started saving several sizes. Safe to run more than once.
++ *
++ *   docker compose exec php php /var/www/html/includes/backfill_image_sizes.php
++ *
++ * Until it has run, the site still works: cards fall back to the full picture.
++ */
++if (PHP_SAPI !== 'cli') {
++    http_response_code(404);
++    exit;
++}
++
++require_once __DIR__ . '/db.php';
++require_once __DIR__ . '/upload_image.php';
++
++$jobs = [
++    'recipe'  => "SELECT DISTINCT image_base FROM recipes WHERE image_base IS NOT NULL",
++    'profile' => "SELECT DISTINCT image_base FROM users WHERE image_base IS NOT NULL",
++];
++
++foreach ($jobs as $type => $sql) {
++    $dir = imageDir($type);
++    $made = $skipped = $missing = 0;
++
++    foreach (db()->query($sql)->fetchAll(PDO::FETCH_COLUMN) as $base) {
++        $full = "$dir/$base.webp";
++        if (!preg_match('/^[a-z]+_[A-Za-z0-9_-]+$/', $base) || !is_file($full)) { $missing++; continue; }
++
++        // Only the sizes that don't exist yet; the full picture is left as it is
++        $todo = array_filter(IMAGE_SIZES[$type], fn($max, $suffix) =>
++            $suffix !== '' && !is_file("$dir/$base$suffix.webp"), ARRAY_FILTER_USE_BOTH);
++        if (!$todo) { $skipped++; continue; }
++
++        $data = file_get_contents($full);
++        $ok = class_exists('Imagick') ? writeSizesImagick($data, $dir, $base, $todo) : null;
++        $ok ??= writeSizesGd($data, $dir, $base, $todo);
++        $ok ? $made++ : fwrite(STDERR, "Could not resize $full\n");
++    }
++    echo "$type: $made resized, $skipped already done, $missing missing files\n";
++}
+diff --git a/src/includes/json_response.php b/src/includes/json_response.php
+new file mode 100644
+index 0000000..67e86e1
+--- /dev/null
++++ b/src/includes/json_response.php
+@@ -0,0 +1,12 @@
++<?php
++/**
++ * Include first in every file under /api.
++ *
++ * PHP sends text/html by default. An API answer that repeats user input (an error with the
++ * bad id, a search term...) could then be opened directly in the browser and run as HTML.
++ * Declaring JSON (and forbidding the browser to guess otherwise) closes that hole.
++ */
++if (!headers_sent()) {
++    header('Content-Type: application/json; charset=utf-8');
++    header('X-Content-Type-Options: nosniff');
++}
+diff --git a/src/includes/modules.php b/src/includes/modules.php
+index ea81e99..583368f 100644
+--- a/src/includes/modules.php
++++ b/src/includes/modules.php
+@@ -2,6 +2,7 @@
+ 
+ require_once __DIR__ . '/session.php';
+ require_once __DIR__ . '/user_fetcher.php';
++require_once __DIR__ . '/upload_image.php';   // photo limits, shared with assets/photo-check.js
+ 
+ 
+ /**
+@@ -20,12 +21,12 @@ function getUser()
+ 
+ /**
+  * Fonts and stylesheets, the same on every page that uses getNavBar().
+- * Also sets the saved theme before first paint so dark mode doesn't flash light.
++ * theme-init.js sets the saved theme before first paint so dark mode doesn't flash light.
+  */
+ function getHeadAssets()
+ {
+     ?>
+-    <script>try{var t=localStorage.getItem('theme');if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
++    <script src="/assets/theme-init.js"></script>
+     <link rel="preconnect" href="https://fonts.googleapis.com">
+     <link rel="preconnect" href="https://fonts.gstatic.com/" crossorigin>
+     <link href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,400..800&display=swap" rel="stylesheet">
+@@ -339,7 +340,9 @@ function getLoginModal()
+                 <label for="password">password</label>
+                 <input id="password" type="password" name="password">
+                 <label for="picture">Profile Picture</label>
+-                <input id="picture" type="file" name="picture">
++                <input id="picture" type="file" name="picture" accept="image/jpeg,image/png,image/webp,image/gif"
++                       <?= imageRulesAttributes() ?> aria-describedby="signup-photo-message">
++                <p class="photo-message" id="signup-photo-message" role="alert" hidden></p>
+                 <button type="submit">Create account</button>
+             </form>
+             <form method="POST" action="/auth/login.php">
+@@ -480,16 +483,17 @@ function addEditModal()
+             <h2 class="form-title">Add a recipe</h2>
+ 
+             <div class="top2">
+-                <div class="upload-box" id="uploadBox">
+-                    <input name="picture" type="file" id="picture" accept="image/*" hidden>
++                <div class="upload-box" id="uploadBox" <?= imageRulesAttributes() ?>>
++                    <input name="picture" type="file" id="picture" accept="image/jpeg,image/png,image/webp,image/gif" hidden aria-describedby="photo-message">
+                     <label for="picture" class="upload-label">
+                         <div class="upload-content" id="uploadContent">
+                             <span class="material-symbols-outlined icon-background">add_a_photo</span>
+                             <p>Add a photo</p>
+-                            <p>JPG, PNG or WEBP, optional</p>
++                            <p>JPG, PNG, WEBP or GIF, up to <?= (int)(IMAGE_MAX_BYTES / 1024 / 1024) ?> MB. Optional</p>
+                         </div>
+                         <img id="preview" class="preview hidden" alt="">
+                     </label>
++                    <p class="photo-message" id="photo-message" role="alert" hidden></p>
+                 </div>
+                 <div class="fm">
+                     <div><label class="l" for="name">Title</label><input class="in-t" type="text" name="name" id="name" autocomplete="off" required></div>
+diff --git a/src/includes/session.php b/src/includes/session.php
+index 8f77a3d..03586c5 100644
+--- a/src/includes/session.php
++++ b/src/includes/session.php
+@@ -2,5 +2,6 @@
+ session_start([
+     'cookie_httponly' => true,
+     'cookie_secure' => false, // IMPORTANT CHANGE TO TRUE WHEN IN PRODUCTION!!!
+-    'use_strict_mode' => true
++    'use_strict_mode' => true,
++    'cookie_samesite' => 'Lax',   // the cookie isn't sent on cross-site POSTs (basic CSRF protection)
+ ]);
+\ No newline at end of file
+diff --git a/src/includes/upload_image.php b/src/includes/upload_image.php
+index 40ed02c..8fcf1b7 100644
+--- a/src/includes/upload_image.php
++++ b/src/includes/upload_image.php
+@@ -1,74 +1,306 @@
+ <?php
++/**
++ * Recipe and profile pictures.
++ *
++ * Every image is saved as WebP in a few sizes, named  {type}_{owner}_{random}{suffix}.webp
++ *   recipe:  ""     (max 1600 px, recipe view)   "_600" (cards, pick card)
++ *   profile: ""     (max 512 px, profile page)   "_200" (avatars in lists)
++ * The random part changes whenever the picture changes, so browsers and nginx can cache
++ * images forever and an edited recipe never shows its old photo.
++ *
++ * Only `image_base` (the name without suffix and extension) is stored in the database.
++ */
+ 
+-function processRecipeImage(?string $imageUrl, ?array $uploadedFile, string|int|null $recipeId, string $imageType): ?string
+-{
+-    if (!$imageUrl && !$uploadedFile) {
+-        return null;
++const IMAGE_MAX_BYTES  = 8 * 1024 * 1024;   // uploads and downloads
++const IMAGE_MAX_PIXELS = 40_000_000;        // refuse decompression bombs before decoding
++const IMAGE_TYPES      = [IMAGETYPE_JPEG, IMAGETYPE_PNG, IMAGETYPE_GIF, IMAGETYPE_WEBP];
++const IMAGE_SIZES      = [
++    'recipe'  => ['' => 1600, '_600' => 600],
++    'profile' => ['' => 512,  '_200' => 200],
++];
++
++const IMAGE_MIN_SIDE   = 300;               // smaller still works, but the browser warns it will look blurry
++
++/** The same limits for assets/photo-check.js, printed into the page by modules.php. */
++function imageRulesAttributes(): string {
++    return sprintf('data-max-bytes="%d" data-max-pixels="%d" data-min-side="%d"',
++        IMAGE_MAX_BYTES, IMAGE_MAX_PIXELS, IMAGE_MIN_SIDE);
++}
++
++/**
++ * When a request is bigger than PHP's post_max_size, PHP throws away ALL fields and files,
++ * so the recipe would arrive empty. Detect that and explain instead of saving nothing.
++ */
++function requestTooLargeMessage(): ?string {
++    $toBytes = function (string $v): int {
++        $n = (int)$v;
++        return match (strtolower(substr(trim($v), -1))) { 'g' => $n << 30, 'm' => $n << 20, 'k' => $n << 10, default => $n };
++    };
++    $limit = $toBytes((string)ini_get('post_max_size'));
++    $sent  = (int)($_SERVER['CONTENT_LENGTH'] ?? 0);
++    if ($limit > 0 && $sent > $limit && empty($_POST) && empty($_FILES)) {
++        return sprintf('The photo is too big. Choose one under %d MB.', IMAGE_MAX_BYTES / 1024 / 1024);
+     }
++    return null;
++}
+ 
+-    // 1. Load image binary data
+-    $imageData = null;
++/** true when the request actually carries a file in this field (not just an empty file input). */
++function photoWasSent(?array $file): bool {
++    return $file !== null && ($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_NO_FILE;
++}
+ 
+-    if ($uploadedFile && isset($uploadedFile['tmp_name'])) {
+-        // User upload
+-        if ($uploadedFile['size'] > 5 * 1024 * 1024) {
+-            return null;
+-        }
+-        $imageData = file_get_contents($uploadedFile['tmp_name']);
+-    } elseif ($imageUrl) {
+-        // Remote download
+-        $ch = curl_init($imageUrl);
+-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+-        curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+-        curl_setopt($ch, CURLOPT_TIMEOUT, 60);
++/**
++ * Why an uploaded photo can't be used, in words for the person who chose it. null = it's fine
++ * (or no photo was sent). Call before saving anything, so the form can be fixed and sent again.
++ * assets/photo-check.js runs the same checks in the browser; this is the backstop.
++ */
++function checkImageUpload(?array $file): ?string {
++    if (!photoWasSent($file)) return null;
++
++    $maxMb = (int)(IMAGE_MAX_BYTES / 1024 / 1024);
++    switch ($file['error']) {
++        case UPLOAD_ERR_OK:
++            break;
++        case UPLOAD_ERR_INI_SIZE:
++        case UPLOAD_ERR_FORM_SIZE:
++            return "The photo is too big. Choose one under $maxMb MB.";
++        case UPLOAD_ERR_PARTIAL:
++            return 'The photo only partly uploaded. Try again.';
++        default:
++            error_log('Photo upload failed on the server, PHP upload error ' . $file['error']);
++            return 'The server could not receive the photo. Try again in a moment.';
++    }
++
++    if (!is_uploaded_file($file['tmp_name'])) return 'The photo could not be read. Try choosing it again.';
++    if ($file['size'] > IMAGE_MAX_BYTES) return "The photo is too big. Choose one under $maxMb MB.";
+ 
+-        $imageData = curl_exec($ch);
++    $head = (string)file_get_contents($file['tmp_name'], false, null, 0, 32);
++    if (preg_match('/^.{4}ftyp(heic|heix|hevc|mif1|msf1)/s', $head)) {
++        return 'iPhone HEIC photos can’t be used yet. Save it as JPG (or set the camera to “Most Compatible”) and try again.';
++    }
++
++    $info = @getimagesize($file['tmp_name']);
++    if (!$info) return 'That file isn’t a picture we can open. Use a JPG, PNG, WEBP or GIF.';
++    if (!in_array($info[2], IMAGE_TYPES, true)) return 'That picture type isn’t supported. Use a JPG, PNG, WEBP or GIF.';
++    if ($info[0] * $info[1] > IMAGE_MAX_PIXELS) {
++        return sprintf('The photo is %d × %d pixels, too large to process. Use one under %d megapixels.',
++            $info[0], $info[1], IMAGE_MAX_PIXELS / 1_000_000);
++    }
++    return null;
++}
+ 
+-        if (curl_errno($ch)) {
+-            error_log('cURL error: ' . curl_error($ch));
++function imageDir(string $imageType): string {
++    return __DIR__ . '/../uploads/' . $imageType . '_pictures';
++}
++
++/**
++ * Save an uploaded file or a remote image. Returns the new image_base, or null if there was
++ * no usable image (wrong type, too big, could not download...). The caller stores the name.
++ *
++ * Kept the old name and arguments so existing callers keep working.
++ */
++function processRecipeImage(?string $imageUrl, ?array $uploadedFile, string|int|null $ownerId, string $imageType): ?string
++{
++    if (!isset(IMAGE_SIZES[$imageType])) {
++        throw new InvalidArgumentException("Unknown image type $imageType");
++    }
++
++    $data = null;
++    if ($uploadedFile && ($uploadedFile['error'] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_OK) {
++        if (!is_uploaded_file($uploadedFile['tmp_name']) || $uploadedFile['size'] > IMAGE_MAX_BYTES) {
+             return null;
+         }
++        $data = file_get_contents($uploadedFile['tmp_name']);
++    } elseif ($imageUrl) {
++        $data = fetchRemoteImage($imageUrl);
++    }
++    if (!$data) {
++        return null;
++    }
++
++    // Check what it really is (not the file name or the browser's claim) and how big it decodes
++    $info = @getimagesizefromstring($data);
++    if (!$info || !in_array($info[2], IMAGE_TYPES, true) || $info[0] * $info[1] > IMAGE_MAX_PIXELS) {
++        return null;
+     }
+ 
+-    if (!$imageData) {
++    $owner = preg_replace('/[^A-Za-z0-9_-]/', '', (string)$ownerId) ?: 'x';
++    $base  = $imageType . '_' . substr($owner, 0, 40) . '_' . bin2hex(random_bytes(4));
++    $dir   = imageDir($imageType);
++    if (!is_dir($dir) && !mkdir($dir, 0755, true) && !is_dir($dir)) {
++        error_log("Image folder missing and could not be created: $dir");
+         return null;
+     }
+ 
+-    $outputPath = __DIR__ . '/../uploads/' . $imageType . '_pictures/' . $imageType . '_' . $recipeId . '.webp';
+-    $basePath = $imageType . '_' . $recipeId;
++    $written = class_exists('Imagick')
++        ? writeSizesImagick($data, $dir, $base, IMAGE_SIZES[$imageType])
++        : null;
++    $written ??= writeSizesGd($data, $dir, $base, IMAGE_SIZES[$imageType]);
+ 
+-    // 2. Try Imagick first (best quality)
+-    if (class_exists('Imagick')) {
+-        try {
+-            $image = new Imagick();
+-            $image->readImageBlob($imageData);
++    if (!$written) {
++        deleteImageFiles($imageType, $base);   // no half-written sets
++        return null;
++    }
++    return $base;
++}
+ 
+-            $image->autoOrient(); // fixes phone photos
+-            $image->stripImage(); // remove EXIF metadata
+-            $image->setImageFormat('webp');
+-            $image->setImageCompressionQuality(80);
+-            $image->resizeImage(1200, 1200, Imagick::FILTER_LANCZOS, 1, true);
+-            $image->thumbnailImage(400, 400, true);
++/** Remove every size of an image. Safe to call with null or with a name from the database. */
++function deleteImageFiles(string $imageType, ?string $base): void {
++    if (!$base || !isset(IMAGE_SIZES[$imageType]) || !preg_match('/^[a-z]+_[A-Za-z0-9_-]+$/', $base)) {
++        return;
++    }
++    foreach (array_keys(IMAGE_SIZES[$imageType]) as $suffix) {
++        $path = imageDir($imageType) . "/$base$suffix.webp";
++        if (is_file($path)) @unlink($path);
++    }
++}
+ 
+-            $image->writeImage($outputPath);
++// ── Writing ──────────────────────────────────────────────────────────────────
+ 
+-            $image->clear();
+-            $image->destroy();
++/** @return bool|null  true = written, false = failed, null = Imagick can't read it (try GD) */
++function writeSizesImagick(string $data, string $dir, string $base, array $sizes): ?bool {
++    try {
++        Imagick::setResourceLimit(Imagick::RESOURCETYPE_MEMORY, 256 * 1024 * 1024);
++        $src = new Imagick();
++        $src->readImageBlob($data);
++        $src->setIteratorIndex(0);                    // first frame of a GIF
++        $img = $src->getImage();
++        $src->clear();
+ 
+-            return $basePath;
++        if (method_exists($img, 'autoOrient')) {
++            $img->autoOrient();                       // phone photos
++        }
++        $img->stripImage();                           // EXIF (location!) and colour profiles
++        $img->transformImageColorspace(Imagick::COLORSPACE_SRGB);
+ 
+-        } catch (Exception $e) {
+-            error_log('Imagick failed: ' . $e->getMessage());
++        foreach ($sizes as $suffix => $max) {
++            $copy = clone $img;
++            if ($copy->getImageWidth() > $max || $copy->getImageHeight() > $max) {
++                $copy->thumbnailImage($max, $max, true);   // fit inside, never upscale
++            }
++            $copy->setImageFormat('webp');
++            $copy->setImageCompressionQuality($max <= 200 ? 72 : 80);
++            $copy->setOption('webp:method', '5');
++            $ok = writeAtomically("$dir/$base$suffix.webp", $copy->getImageBlob());
++            $copy->clear();
++            if (!$ok) return false;
+         }
++        $img->clear();
++        return true;
++    } catch (Throwable $e) {
++        error_log('Imagick could not process image: ' . $e->getMessage());
++        return null;
++    }
++}
++
++function writeSizesGd(string $data, string $dir, string $base, array $sizes): bool {
++    $img = @imagecreatefromstring($data);
++    if (!$img) return false;
++
++    $img = gdAutoOrient($img, $data);
++    if (!imageistruecolor($img)) imagepalettetotruecolor($img);
++    imagealphablending($img, true);
++    imagesavealpha($img, true);
++
++    foreach ($sizes as $suffix => $max) {
++        [$w, $h] = [imagesx($img), imagesy($img)];
++        $scale = min(1, $max / max($w, $h));
++        $copy = $scale < 1
++            ? imagescale($img, max(1, (int)round($w * $scale)), max(1, (int)round($h * $scale)), IMG_BICUBIC)
++            : $img;
++
++        ob_start();
++        imagewebp($copy, null, $max <= 200 ? 72 : 80);
++        $ok = writeAtomically("$dir/$base$suffix.webp", ob_get_clean());
++        if ($copy !== $img) imagedestroy($copy);
++        if (!$ok) { imagedestroy($img); return false; }
+     }
++    imagedestroy($img);
++    return true;
++}
++
++/** GD ignores EXIF orientation, so phone photos come out sideways without this. */
++function gdAutoOrient(GdImage $img, string $data): GdImage {
++    if (!function_exists('exif_read_data') || !str_starts_with($data, "\xFF\xD8")) return $img;
++    $exif = @exif_read_data('data://image/jpeg;base64,' . base64_encode($data));
++    $rotate = [3 => 180, 6 => -90, 8 => 90][$exif['Orientation'] ?? 1] ?? 0;
++    return $rotate ? (imagerotate($img, $rotate, 0) ?: $img) : $img;
++}
++
++/** Write to a temp file and rename, so a half-written image is never served. */
++function writeAtomically(string $path, string $bytes): bool {
++    if ($bytes === '') return false;
++    $tmp = $path . '.' . bin2hex(random_bytes(4)) . '.tmp';
++    if (file_put_contents($tmp, $bytes) === false) return false;
++    if (!rename($tmp, $path)) { @unlink($tmp); return false; }
++    return true;
++}
++
++// ── Downloading (recipe import) ──────────────────────────────────────────────
++
++/**
++ * Download an image from a URL that came from a web page (so: untrusted).
++ * Blocks internal addresses (the database, the parser, cloud metadata...) on every redirect,
++ * and stops reading after IMAGE_MAX_BYTES.
++ */
++function fetchRemoteImage(string $url, int $redirectsLeft = 3): ?string {
++    $parts = parse_url($url);
++    $scheme = strtolower($parts['scheme'] ?? '');
++    $host = $parts['host'] ?? '';
++    if (!in_array($scheme, ['http', 'https'], true) || $host === '') return null;
+ 
+-    // 3. Fallback to GD
+-    $img = imagecreatefromstring($imageData);
+-    if (!$img) {
++    $port = $parts['port'] ?? ($scheme === 'https' ? 443 : 80);
++    $ip = resolvePublicIp($host);
++    if ($ip === null) {
++        error_log("Image download blocked (not a public address): $url");
+         return null;
+     }
+ 
+-    imagewebp($img, $outputPath, 80);
++    $body = '';
++    $tooBig = false;
++    $ch = curl_init($url);
++    curl_setopt_array($ch, [
++        CURLOPT_RESOLVE         => ["$host:$port:" . (str_contains($ip, ':') ? "[$ip]" : $ip)],   // connect to the address we checked, not a re-resolved one
++        CURLOPT_PROTOCOLS       => CURLPROTO_HTTP | CURLPROTO_HTTPS,
++        CURLOPT_FOLLOWLOCATION  => false,                 // redirects are checked one by one below
++        CURLOPT_CONNECTTIMEOUT  => 5,
++        CURLOPT_TIMEOUT         => 20,
++        CURLOPT_USERAGENT       => 'Mozilla/5.0 (compatible; FoodDecider/1.0)',
++        CURLOPT_HTTPHEADER      => ['Accept: image/webp,image/*;q=0.9'],
++        CURLOPT_WRITEFUNCTION   => function ($ch, $chunk) use (&$body, &$tooBig) {
++            $body .= $chunk;
++            if (strlen($body) > IMAGE_MAX_BYTES) { $tooBig = true; return 0; }   // abort the transfer
++            return strlen($chunk);
++        },
++    ]);
++    curl_exec($ch);
++    $status   = curl_getinfo($ch, CURLINFO_HTTP_CODE);
++    $location = curl_getinfo($ch, CURLINFO_REDIRECT_URL);
++    $type     = (string)curl_getinfo($ch, CURLINFO_CONTENT_TYPE);
++    $error    = curl_errno($ch) && !$tooBig ? curl_error($ch) : null;
++    unset($ch);
+ 
+-    return $basePath;
+-}
+\ No newline at end of file
++    if ($error) { error_log("Image download failed: $error"); return null; }
++    if ($tooBig) return null;
++    if ($status >= 300 && $status < 400 && $location) {
++        return $redirectsLeft > 0 ? fetchRemoteImage($location, $redirectsLeft - 1) : null;
++    }
++    if ($status !== 200 || ($type !== '' && !str_starts_with(strtolower($type), 'image/'))) return null;
++    return $body;
++}
++
++/** First public IPv4/IPv6 address of a host, or null if it resolves to anything private/reserved. */
++function resolvePublicIp(string $host): ?string {
++    $host = trim($host, '[]');
++    $ips = filter_var($host, FILTER_VALIDATE_IP) ? [$host] : array_merge(
++        gethostbynamel($host) ?: [],
++        array_column(@dns_get_record($host, DNS_AAAA) ?: [], 'ipv6')
++    );
++    if (!$ips) return null;
++    foreach ($ips as $ip) {   // every address must be public, or a DNS answer could mix in an internal one
++        if (!filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)) {
++            return null;
++        }
++    }
++    return $ips[0];
++}

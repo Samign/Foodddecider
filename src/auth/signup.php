@@ -10,6 +10,12 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     exit;
 }
 
+// Too big for PHP: every field arrives empty, which would otherwise look like a missing email
+if ($tooLarge = requestTooLargeMessage()) {
+    http_response_code(413);
+    exit($tooLarge);
+}
+
 $email = trim($_POST['email'] ?? '');
 $username = trim($_POST['username'] ?? '');
 $password = trim($_POST['password'] ?? '');
@@ -19,13 +25,26 @@ if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
     exit;
 }
 
-$profilePicture = null;
+// The username ends up in file names, URLs (/user/name) and pages: letters, digits, _ . - only.
+// Before this, "../../x" wrote files outside the uploads folder and "<img onerror=...>" was a valid name.
+if (!preg_match('/^[A-Za-z0-9][A-Za-z0-9_.-]{2,29}$/', $username)) {
+    http_response_code(400);
+    exit('Username: 3-30 letters, numbers, dots, dashes or underscores');
+}
 
-if ($_FILES['picture']['error'] === UPLOAD_ERR_OK) {
-    $profilePicture = processRecipeImage(null, $_FILES['picture'], $username, "profile");
-} else {
-    $avatar = generateIdenticon($email);
-    file_put_contents("/var/www/html/uploads/profile_pictures/" . $username . "_avatar.svg", $avatar);
+if (strlen($password) < 8) {
+    http_response_code(400);
+    exit('Password: at least 8 characters');
+}
+
+// A bad photo doesn't stop the sign-up: they get the generated avatar (the page already warned them)
+$profilePicture = checkImageUpload($_FILES['picture'] ?? null)
+    ? null
+    : processRecipeImage(null, $_FILES['picture'] ?? null, $username, "profile");
+if (!$profilePicture) {
+    $dir = __DIR__ . '/../uploads/profile_pictures';
+    if (!is_dir($dir)) mkdir($dir, 0755, true);
+    file_put_contents("$dir/{$username}_avatar.svg", generateIdenticon($email));
 }
 
 $hash = password_hash($password, PASSWORD_DEFAULT);

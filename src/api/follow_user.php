@@ -1,4 +1,5 @@
 <?php 
+require_once __DIR__ . '/../includes/json_response.php';   // JSON content type (see the file)
 require_once __DIR__ . '/../includes/session.php';
 require_once __DIR__ . '/../includes/follow_check.php';
 require_once __DIR__ . '/../includes/db.php';

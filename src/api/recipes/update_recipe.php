@@ -1,4 +1,5 @@
 <?php
+require_once __DIR__ . '/../../includes/json_response.php';   // JSON content type (see the file)
 require_once __DIR__ . '/../../includes/require_login.php';
 require_once __DIR__ . '/../../includes/db.php';
 require_once __DIR__ . '/../../includes/upload_image.php';
@@ -16,7 +17,7 @@ $db = db();
 $user_id = $_SESSION['user_id'];
 
 // Verify recipe exists and belongs to the current user
-$stmt = $db->prepare("SELECT owner_id FROM recipes WHERE id = :recipe_id");
+$stmt = $db->prepare("SELECT owner_id, image_base FROM recipes WHERE id = :recipe_id");
 $stmt->bindValue(':recipe_id', $recipe_id, PDO::PARAM_INT);
 $stmt->execute();
 $recipe = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -35,10 +36,20 @@ if ($recipe['owner_id'] != $user_id) {
 
 $input = fetchRecipeInput();
 
-$recipePicture = null;
-if ($input['picture'] && !empty($input['picture']['name']) && $input['picture']['error'] === UPLOAD_ERR_OK) {
-    $recipePicture = processRecipeImage(null, $input['picture'], null, "recipe");
+if ($tooLarge = requestTooLargeMessage()) {   // every field arrived empty: nothing to save
+    http_response_code(413);
+    echo json_encode(['success' => false, 'field' => 'picture', 'error' => $tooLarge]);
+    exit;
 }
+
+// A photo that can't be used never blocks the save: keep the old photo and say why
+$photoError = checkImageUpload($input['picture']);
+if ($photoError) {
+    $input['picture'] = null;
+}
+
+// Was saved as "recipe_.webp" (no id), so every edited recipe shared, and overwrote, one picture
+$recipePicture = processRecipeImage(null, $input['picture'], $recipe_id, "recipe");
 
 $db->beginTransaction();
 
@@ -93,10 +104,22 @@ try {
 
     $db->commit();
 
-    echo json_encode(['success' => true]);
+    if ($recipePicture !== null) {
+        deleteImageFiles('recipe', $recipe['image_base']);   // the old picture is no longer used
+    }
+
+    $warning = null;
+    if ($photoError) {
+        $warning = "Changes saved, but not the new photo. $photoError";
+    } elseif (photoWasSent($input['picture']) && $recipePicture === null) {
+        $warning = 'Changes saved, but the new photo could not be processed. The old photo is still used.';
+    }
+    echo json_encode(['success' => true, 'warning' => $warning]);
 
 } catch (Throwable $e) {
     $db->rollback();
+    deleteImageFiles('recipe', $recipePicture);              // the new picture never got saved
+    error_log('Update recipe failed: ' . $e->getMessage());
     http_response_code(500);
-    echo json_encode(['error' => 'Failed to update recipe: ' . $e->getMessage()]);
+    echo json_encode(['error' => 'Failed to update recipe']);
 }

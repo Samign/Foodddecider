@@ -1,4 +1,4 @@
-import { renderRecipeList } from './recipe-cards.js';
+import { renderRecipeList, escapeHtml, avatarUrl } from './recipe-cards.js';
 let activeTab = 'all-tab';
 
 async function search(q) {
@@ -26,12 +26,15 @@ function renderProfiles(profiles) {
     
     profiles.forEach(profile => {
         const profileCard = document.createElement('a');
-        profileCard.href = `/user/${profile.username}`;
+        profileCard.href = `/user/${encodeURIComponent(profile.username)}`;
         profileCard.className = 'profile-card';
+        // Username and bio are typed by users: escape everything that goes into the markup
         profileCard.innerHTML = `
-            <img src="${profile.image_base ? '/uploads/profile_pictures/' + profile.image_base + '.webp' : '/uploads/profile_pictures/' + profile.username + '_avatar.svg'}" alt="${profile.username}'s avatar" class="profile-avatar">
-            <h3>${profile.username}</h3>
-            <p>${profile.bio || ''}</p>
+            <img src="${avatarUrl(profile.username, profile.image_base)}"
+                 data-fallback="${avatarUrl(profile.username, profile.image_base, '')}"
+                 alt="" class="profile-avatar" loading="lazy">
+            <h3>${escapeHtml(profile.username)}</h3>
+            <p>${escapeHtml(profile.bio || '')}</p>
         `;
         profileContainer.appendChild(profileCard);
     });

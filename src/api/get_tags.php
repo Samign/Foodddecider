@@ -1,4 +1,5 @@
 <?php
+require_once __DIR__ . '/../includes/json_response.php';   // JSON content type (see the file)
 header('Content-Type: application/json');
 require __DIR__ . '/../includes/db.php';
 

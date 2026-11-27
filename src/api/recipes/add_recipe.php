@@ -1,4 +1,5 @@
 <?php
+require_once __DIR__ . '/../../includes/json_response.php';   // JSON content type (see the file)
 
 require_once __DIR__ . '/../../includes/db.php';
 require_once __DIR__ . '/../../includes/require_login.php';
@@ -7,6 +8,20 @@ require_once __DIR__ . '/../../includes/recipe_adder.php';
 require_once __DIR__ . '/../../includes/helpers/recipe_helper.php';
 
 $input = fetchRecipeInput();
+
+// Too big for PHP: every field arrived empty, so there is nothing to save. Say why.
+if ($tooLarge = requestTooLargeMessage()) {
+    http_response_code(413);
+    echo json_encode(['success' => false, 'field' => 'picture', 'error' => $tooLarge]);
+    exit;
+}
+
+// A photo that can't be used never blocks the recipe: save without it and say why.
+// (The browser normally refuses it when it's chosen, see assets/photo-check.js.)
+$photoError = checkImageUpload($input['picture']);
+if ($photoError) {
+    $input['picture'] = null;
+}
 
 
 // echo "Input data received: " . json_encode($input) . "\n"; // Debugging line
@@ -26,16 +41,23 @@ $recipeId = addRecipe([
     'tags' => $input['tags'] ?? []
 ]);
 
-$recipePicture = null;
-if ($input['picture'] && !empty($input['picture']['name']) && $input['picture']['error'] === UPLOAD_ERR_OK) {
-    $recipePicture = processRecipeImage(null, $input['picture'], $recipeId, "recipe");
+if (!$recipeId) {
+    exit;   // addRecipe() already sent a 500 with the error
 }
 
-$db = db();
-$updateStmt = $db->prepare("UPDATE recipes SET image_base = :image_base WHERE id = :id");
-$updateStmt->execute([
-    ':image_base' => $recipePicture,
-    ':id' => $recipeId
-]);
+// processRecipeImage() checks the upload itself (error code, size, real image type)
+$recipePicture = processRecipeImage(null, $input['picture'], $recipeId, "recipe");
+if ($recipePicture) {
+    db()->prepare("UPDATE recipes SET image_base = :image_base WHERE id = :id")
+        ->execute([':image_base' => $recipePicture, ':id' => $recipeId]);
+}
 
-echo json_encode(['success' => true, 'recipe_id' => $recipeId]);
+// Tell the person when their photo wasn't used, instead of quietly saving without it
+$warning = null;
+if ($photoError) {
+    $warning = "Recipe saved without a photo. $photoError";
+} elseif (photoWasSent($input['picture']) && !$recipePicture) {
+    $warning = 'Recipe saved without a photo: it could not be processed. Edit the recipe to try another one.';
+}
+
+echo json_encode(['success' => true, 'recipe_id' => $recipeId, 'warning' => $warning]);

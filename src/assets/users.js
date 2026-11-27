@@ -1,5 +1,6 @@
 // import { setCurrentExpanded } from "./popstate.js";
 import { toast } from './toast.js';
+import { avatarUrl } from './recipe-cards.js';
 
 document.addEventListener('DOMContentLoaded', () => {
 
@@ -53,11 +54,13 @@ function showFollowerList(event) {
                 const userElement = document.createElement('div');
                 userElement.className = 'follower-item';
                 userElement.addEventListener('click', () => {
-                    window.location.href = `/user/${user.username}`;
+                    window.location.href = `/user/${encodeURIComponent(user.username)}`;
                 });
                 list.appendChild(userElement);
                 const userimg = document.createElement('img');
-                userimg.src = user.image_base ? `/uploads/profile_pictures/${user.image_base}_200.webp` : `/uploads/profile_pictures/${user.username}_avatar.svg`;
+                userimg.src = avatarUrl(user.username, user.image_base);
+                userimg.dataset.fallback = avatarUrl(user.username, user.image_base, '');   // pictures from before the _200 size existed
+                userimg.loading = 'lazy';
                 userimg.alt = `${user.username}'s profile picture`;
                 userimg.className = 'follower-profile-pic';
                 userElement.appendChild(userimg);
