@@ -28,34 +28,42 @@ $follower_id = $_SESSION['user_id'] ?? null;
 $input = json_decode(file_get_contents('php://input'), true);
 $followed_id = $input['followed_id'] ?? null;
 
-if (!$follower_id || !$followed_id) {
+if (!$follower_id) {
+    http_response_code(401);   // the page asks the visitor to log in
+    echo json_encode(['success' => false, 'error' => 'Log in to follow people']);
+    exit;
+}
+if (!$followed_id) {
     http_response_code(400);
-    echo json_encode(['error' => 'Missing follower_id or followed_id, follower id: '
-    . $follower_id . ' followed id ' . $followed_id . 'input: ' . file_get_contents('php://input')]);
+    echo json_encode(['success' => false, 'error' => 'Missing who to follow']);
+    exit;
+}
+if ((string)$followed_id === (string)$follower_id) {
+    http_response_code(400);
+    echo json_encode(['success' => false, 'error' => 'You can’t follow yourself']);
     exit;
 }
 
-$followCheck = checkIfFollowing($follower_id, $followed_id);
-if ($followCheck) {
+try {
     $db = db();
-    $stmt = $db->prepare("DELETE FROM followers WHERE follower_id = :follower_id AND followed_id = :followed_id");
-    $stmt->execute([
-        ':follower_id' => $follower_id,
-        ':followed_id' => $followed_id
+    $following = !checkIfFollowing($follower_id, $followed_id);
+    $sql = $following
+        ? "INSERT INTO followers (follower_id, followed_id) VALUES (:follower_id, :followed_id) ON CONFLICT DO NOTHING"
+        : "DELETE FROM followers WHERE follower_id = :follower_id AND followed_id = :followed_id";
+    $db->prepare($sql)->execute([':follower_id' => $follower_id, ':followed_id' => $followed_id]);
+
+    // The real total, so the page can correct its instant +1/-1 if others followed meanwhile
+    $count = $db->prepare("SELECT COUNT(*) FROM followers WHERE followed_id = :id");
+    $count->execute([':id' => $followed_id]);
+
+    echo json_encode([
+        'success'   => true,
+        'following' => $following,
+        'unfollowed'=> !$following,
+        'followers' => (int)$count->fetchColumn(),
     ]);
-    echo json_encode(['success' => true, 'unfollowed' => true]);
-    exit;
-} else {
-    try {
-        $db = db();
-        $stmt = $db->prepare("INSERT INTO followers (follower_id, followed_id) VALUES (:follower_id, :followed_id)");
-        $stmt->execute([
-            ':follower_id' => $follower_id,
-            ':followed_id' => $followed_id
-        ]);
-        echo json_encode(['success' => true]);
-    } catch (throwable $e) {
-        http_response_code(500);
-        echo json_encode(['error' => 'Failed to follow user']);
-    }
+} catch (Throwable $e) {
+    error_log('follow_user: ' . $e->getMessage());
+    http_response_code(500);
+    echo json_encode(['success' => false, 'error' => 'Could not update follow. Try again.']);
 }

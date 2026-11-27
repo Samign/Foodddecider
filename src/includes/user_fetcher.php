@@ -9,8 +9,9 @@ function grabUserInfo($requested_user_UUID = null, $requested_user_username = nu
         $db = db();
         $stmt = $db->prepare("
             SELECT u.id, u.username, u.email, u.bio, u.image_base, 
-                   COUNT(fs.followed_id) AS followers_count, 
-                   COUNT(fd.follower_id) AS following_count
+                   -- DISTINCT: the two joins multiply rows (2 followers x 3 following counted as 6 each)
+                   COUNT(DISTINCT fs.follower_id) AS followers_count,
+                   COUNT(DISTINCT fd.followed_id) AS following_count
             FROM users u
             LEFT JOIN followers fs ON u.id = fs.followed_id
             LEFT JOIN followers fd ON u.id = fd.follower_id
@@ -23,7 +24,7 @@ function grabUserInfo($requested_user_UUID = null, $requested_user_username = nu
         return $stmt->fetch(PDO::FETCH_ASSOC);
 
     } catch (Throwable $e) {
-        http_response_code(500);
-        echo json_encode(['error' => 'Failed to fetch user data ' . $e->getMessage()]);
+        error_log('grabUserInfo: ' . $e->getMessage());
+        return null;
     }
 }

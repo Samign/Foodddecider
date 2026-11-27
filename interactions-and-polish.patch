@@ -1,0 +1,3111 @@
+diff --git a/src/api/follow_user.php b/src/api/follow_user.php
+index c3080d3..cfa1e7a 100644
+--- a/src/api/follow_user.php
++++ b/src/api/follow_user.php
+@@ -28,34 +28,42 @@ $follower_id = $_SESSION['user_id'] ?? null;
+ $input = json_decode(file_get_contents('php://input'), true);
+ $followed_id = $input['followed_id'] ?? null;
+ 
+-if (!$follower_id || !$followed_id) {
++if (!$follower_id) {
++    http_response_code(401);   // the page asks the visitor to log in
++    echo json_encode(['success' => false, 'error' => 'Log in to follow people']);
++    exit;
++}
++if (!$followed_id) {
++    http_response_code(400);
++    echo json_encode(['success' => false, 'error' => 'Missing who to follow']);
++    exit;
++}
++if ((string)$followed_id === (string)$follower_id) {
+     http_response_code(400);
+-    echo json_encode(['error' => 'Missing follower_id or followed_id, follower id: '
+-    . $follower_id . ' followed id ' . $followed_id . 'input: ' . file_get_contents('php://input')]);
++    echo json_encode(['success' => false, 'error' => 'You can’t follow yourself']);
+     exit;
+ }
+ 
+-$followCheck = checkIfFollowing($follower_id, $followed_id);
+-if ($followCheck) {
++try {
+     $db = db();
+-    $stmt = $db->prepare("DELETE FROM followers WHERE follower_id = :follower_id AND followed_id = :followed_id");
+-    $stmt->execute([
+-        ':follower_id' => $follower_id,
+-        ':followed_id' => $followed_id
++    $following = !checkIfFollowing($follower_id, $followed_id);
++    $sql = $following
++        ? "INSERT INTO followers (follower_id, followed_id) VALUES (:follower_id, :followed_id) ON CONFLICT DO NOTHING"
++        : "DELETE FROM followers WHERE follower_id = :follower_id AND followed_id = :followed_id";
++    $db->prepare($sql)->execute([':follower_id' => $follower_id, ':followed_id' => $followed_id]);
++
++    // The real total, so the page can correct its instant +1/-1 if others followed meanwhile
++    $count = $db->prepare("SELECT COUNT(*) FROM followers WHERE followed_id = :id");
++    $count->execute([':id' => $followed_id]);
++
++    echo json_encode([
++        'success'   => true,
++        'following' => $following,
++        'unfollowed'=> !$following,
++        'followers' => (int)$count->fetchColumn(),
+     ]);
+-    echo json_encode(['success' => true, 'unfollowed' => true]);
+-    exit;
+-} else {
+-    try {
+-        $db = db();
+-        $stmt = $db->prepare("INSERT INTO followers (follower_id, followed_id) VALUES (:follower_id, :followed_id)");
+-        $stmt->execute([
+-            ':follower_id' => $follower_id,
+-            ':followed_id' => $followed_id
+-        ]);
+-        echo json_encode(['success' => true]);
+-    } catch (throwable $e) {
+-        http_response_code(500);
+-        echo json_encode(['error' => 'Failed to follow user']);
+-    }
+-}
+\ No newline at end of file
++} catch (Throwable $e) {
++    error_log('follow_user: ' . $e->getMessage());
++    http_response_code(500);
++    echo json_encode(['success' => false, 'error' => 'Could not update follow. Try again.']);
++}
+diff --git a/src/api/groups/groups.php b/src/api/groups/groups.php
+index 1fb2e39..f0718bc 100644
+--- a/src/api/groups/groups.php
++++ b/src/api/groups/groups.php
+@@ -8,7 +8,7 @@ $method = $_SERVER['REQUEST_METHOD'];
+ if ($method === 'GET') {
+     try {
+         $db = db();
+-        $stmt = $db->prepare("SELECT g.id, g.group_name FROM groups g INNER JOIN group_members gm ON g.id = gm.group_id WHERE gm.member_id = :member_id");
++        $stmt = $db->prepare("SELECT g.id, g.group_name, (SELECT COUNT(*) FROM group_members m WHERE m.group_id = g.id) AS member_count FROM groups g INNER JOIN group_members gm ON g.id = gm.group_id WHERE gm.member_id = :member_id ORDER BY g.group_name");
+         $stmt->execute([':member_id' => $_SESSION['user_id']]);
+         $groups = $stmt->fetchAll(PDO::FETCH_ASSOC);
+ 
+diff --git a/src/api/recipes/add_recipe.php b/src/api/recipes/add_recipe.php
+index 65d7329..9290002 100644
+--- a/src/api/recipes/add_recipe.php
++++ b/src/api/recipes/add_recipe.php
+@@ -9,6 +9,15 @@ require_once __DIR__ . '/../../includes/helpers/recipe_helper.php';
+ 
+ $input = fetchRecipeInput();
+ 
++/** The recipe being forked, if it exists and this user may see it (otherwise no link is stored). */
++function forkableRecipeId($id): ?int {
++    $id = filter_var($id, FILTER_VALIDATE_INT);
++    if (!$id) return null;
++    $stmt = db()->prepare("SELECT id FROM recipes WHERE id = :id AND (is_public = '1' OR owner_id = :user)");
++    $stmt->execute([':id' => $id, ':user' => $_SESSION['user_id']]);
++    return $stmt->fetchColumn() ? $id : null;
++}
++
+ // Too big for PHP: every field arrived empty, so there is nothing to save. Say why.
+ if ($tooLarge = requestTooLargeMessage()) {
+     http_response_code(413);
+@@ -37,7 +46,7 @@ $recipeId = addRecipe([
+     'servings' => $input['servings'],
+     'step_sections' => $input['steps'] ?? [],
+     'ingredient_sections' => $input['ingredients'] ?? [],
+-    'forked_from_recipe_id' => $input['forked_from_recipe_id'] ?? null,
++    'forked_from_recipe_id' => forkableRecipeId($input['forked_from_recipe_id'] ?? null),
+     'tags' => $input['tags'] ?? []
+ ]);
+ 
+diff --git a/src/api/recipes/fetch_recipes.php b/src/api/recipes/fetch_recipes.php
+index e604973..017e756 100644
+--- a/src/api/recipes/fetch_recipes.php
++++ b/src/api/recipes/fetch_recipes.php
+@@ -21,6 +21,11 @@ if ($request_method === 'POST') {
+ 
+     if ($id) {
+         $recipe = getRecipe($id);
++        if (!$recipe) {
++            http_response_code(404);   // deleted, or private to someone else
++            echo json_encode(['error' => 'This recipe doesn’t exist any more, or it’s private.']);
++            exit;
++        }
+         echo json_encode($recipe);
+         exit;
+     }
+diff --git a/src/api/recipes/register_view.php b/src/api/recipes/register_view.php
+index ac66936..0a43bdf 100644
+--- a/src/api/recipes/register_view.php
++++ b/src/api/recipes/register_view.php
+@@ -34,7 +34,8 @@ try {
+         ':session_id' => $session_id
+     ]);
+ 
+-    if ($stmt->fetch()) {
++    $counted = (bool)$stmt->fetch();
++    if ($counted) {
+         $update_stmt = $db->prepare("
+             UPDATE recipes 
+             SET view_count = view_count + 1 
+@@ -44,8 +45,11 @@ try {
+     }
+ 
+     $db->commit();
++    echo json_encode(['success' => true, 'counted' => $counted]);   // the page adds 1 to the views it shows
+ 
+ } catch (Exception $e) {
+     $db->rollBack();
+-    throw $e;
++    error_log('register_view: ' . $e->getMessage());
++    http_response_code(500);
++    echo json_encode(['success' => false, 'error' => 'Could not count the view']);
+ }
+\ No newline at end of file
+diff --git a/src/api/recipes/save_recipe.php b/src/api/recipes/save_recipe.php
+index 021a6e5..a7bb33e 100644
+--- a/src/api/recipes/save_recipe.php
++++ b/src/api/recipes/save_recipe.php
+@@ -1,30 +1,51 @@
+ <?php
+ require_once __DIR__ . '/../../includes/json_response.php';   // JSON content type (see the file)
++require_once __DIR__ . '/../../includes/require_login.php';     // 401 for visitors: the page asks them to log in
+ require_once __DIR__ . '/../../includes/db.php';
+-require_once __DIR__ . '/../../includes/session.php';
+ 
++// Toggles "saved" for the current user. Answers the new state and the new total,
++// so the page can show the right number even if someone else saved it meanwhile.
+ $data = json_decode(file_get_contents('php://input'), true);
+-$recipe_id = $data['recipe_id'] ?? null;
++$recipeId = filter_var($data['recipe_id'] ?? null, FILTER_VALIDATE_INT);
++$userId = $_SESSION['user_id'];
++
++if (!$recipeId) {
++    http_response_code(400);
++    echo json_encode(['success' => false, 'error' => 'Missing recipe']);
++    exit;
++}
+ 
+ $db = db();
+ 
+-// Check if already saved
+-$stmt = $db->prepare("SELECT 1 FROM saved_recipes WHERE user_id = :user_id AND recipe_id = :recipe_id");
+-$stmt->bindValue(':user_id', $_SESSION['user_id']);
+-$stmt->bindValue(':recipe_id', $recipe_id);
+-$stmt->execute();
+-if ($stmt->fetch()) {
+-    $stmt = $db->prepare("DELETE FROM saved_recipes WHERE user_id = :user_id AND recipe_id = :recipe_id");
+-    $stmt->bindValue(':user_id', $_SESSION['user_id']);
+-    $stmt->bindValue(':recipe_id', $recipe_id);
+-    $stmt->execute();
+-    echo json_encode(['status' => 'unsaved']);
++// Only recipes this person can see, and not their own (it's already in their kitchen)
++$stmt = $db->prepare("SELECT owner_id FROM recipes WHERE id = :id AND (is_public = '1' OR owner_id = :user)");
++$stmt->execute([':id' => $recipeId, ':user' => $userId]);
++$recipe = $stmt->fetch();
++if (!$recipe) {
++    http_response_code(404);
++    echo json_encode(['success' => false, 'error' => 'This recipe doesn’t exist any more.']);
+     exit;
+ }
++if ((string)$recipe['owner_id'] === (string)$userId) {
++    http_response_code(400);
++    echo json_encode(['success' => false, 'error' => 'Your own recipes are always in your kitchen.']);
++    exit;
++}
++
++$delete = $db->prepare("DELETE FROM saved_recipes WHERE user_id = :user AND recipe_id = :id");
++$delete->execute([':user' => $userId, ':id' => $recipeId]);
++$saved = $delete->rowCount() === 0;
++if ($saved) {
++    $db->prepare("INSERT INTO saved_recipes (user_id, recipe_id) VALUES (:user, :id) ON CONFLICT DO NOTHING")
++       ->execute([':user' => $userId, ':id' => $recipeId]);
++}
+ 
+-$stmt = $db->prepare("INSERT INTO saved_recipes (user_id, recipe_id) VALUES (:user_id, :recipe_id) ON CONFLICT DO NOTHING");
+-$stmt->bindValue(':user_id', $_SESSION['user_id']);
+-$stmt->bindValue(':recipe_id', $recipe_id);
+-$stmt->execute();
++$count = $db->prepare("SELECT COUNT(*) FROM saved_recipes WHERE recipe_id = :id");
++$count->execute([':id' => $recipeId]);
+ 
+-echo json_encode(['status' => 'saved']);
+\ No newline at end of file
++echo json_encode([
++    'success' => true,
++    'status'  => $saved ? 'saved' : 'unsaved',
++    'saved'   => $saved,
++    'saves'   => (int)$count->fetchColumn(),
++]);
+diff --git a/src/api/shopping/shopping_lists.php b/src/api/shopping/shopping_lists.php
+index 958fe1f..bff2923 100644
+--- a/src/api/shopping/shopping_lists.php
++++ b/src/api/shopping/shopping_lists.php
+@@ -100,6 +100,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+         respond(['ok' => true]);
+     }
+ 
++    if ($action === 'rename') {
++        $listId = (int)($in['list_id'] ?? 0);
++        $name = trim((string)($in['list_name'] ?? ''));
++        if ($name === '' || mb_strlen($name) > 255) respond(['error' => 'Give the list a name'], 422);
++        requireListOwner($db, $userId, $listId);
++
++        $stmt = $db->prepare("UPDATE shopping_lists SET list_name = :name WHERE id = :list AND user_id = :user");
++        bindAll($stmt, ['name' => $name, 'list' => $listId, 'user' => $userId]);
++        $stmt->execute();
++        respond(['ok' => true, 'name' => $name]);
++    }
++
+     if ($action === 'delete') {
+         $listId = (int)($in['list_id'] ?? 0);
+         requireListOwner($db, $userId, $listId);
+diff --git a/src/assets/add-recipe.js b/src/assets/add-recipe.js
+index 5df6016..d35692c 100644
+--- a/src/assets/add-recipe.js
++++ b/src/assets/add-recipe.js
+@@ -7,10 +7,15 @@ let lastSelectedIngredientSection = null;
+ let lastSelectedIngredientItem = null;
+ let lastSelectedInstructionSection = null;
+ let lastSelectedInstructionBox = null;
++let setTagsImpl = null;   // set in init(): replaces the form's tags (used when editing a recipe)
++
++/** Put these tag names in the form (editing / forking). Before this, editing a recipe dropped all its tags. */
++export function setFormTags(names = []) {
++    setTagsImpl?.(names);
++}
+ 
+ 
+ export async function init(targetElement) {
+-    console.log("init called for add-recipe.js" + (targetElement ? ` on ${targetElement.id}` : ''));
+ 
+     const ingredientSuggestions = targetElement.querySelector('.autocomplete-list');
+ 
+@@ -123,6 +128,14 @@ export async function init(targetElement) {
+         if (addTagButton) {
+             addTagButton.addEventListener('click', addFromInput);
+         }
++
++        setTagsImpl = (names) => {
++            tagsContainer.querySelectorAll('.tag-item').forEach(el => el.remove());
++            names.forEach(name => addTag(name));
++            syncSuggestions();
++        };
++        // A reset form (after saving, or a fresh "Add recipe") starts without tags
++        targetElement.addEventListener('reset', () => setTagsImpl([]));
+     
+         // Optional: Enter adds the tag instead of submitting the form
+         tagSearchInput.addEventListener('keydown', (e) => {
+@@ -358,7 +371,7 @@ export async function readSaveResponse(response, failText) {
+         return false;
+     }
+     if (result.warning) toast.info(result.warning, { duration: 8000 });
+-    return true;
++    return result;   // truthy: saved (has recipe_id for new recipes)
+ }
+ 
+ export async function handleAddRecipe(e) {
+@@ -370,9 +383,13 @@ export async function handleAddRecipe(e) {
+             method: 'POST',
+             body: new FormData(form)
+         });
+-        if (await readSaveResponse(response, 'Failed to add recipe')) {
+-            toast.success('Recipe added successfully');
++        const result = await readSaveResponse(response, 'Failed to add recipe');
++        if (result) {
++            toast.success('Recipe added to your kitchen');
+             form.reset();
++            document.getElementById('add-menu')?.classList.add('hidden');
++            // recipes.js reloads the list, recipe-modal.js opens the new recipe
++            document.dispatchEvent(new CustomEvent('recipe:saved', { detail: { id: Number(result.recipe_id), open: true } }));
+         }
+     } catch {
+         toast.error('Could not reach the server. Your recipe is still in the form, try again.');
+diff --git a/src/assets/add_to_list.js b/src/assets/add_to_list.js
+index 13f3b54..912ef4b 100644
+--- a/src/assets/add_to_list.js
++++ b/src/assets/add_to_list.js
+@@ -1,4 +1,5 @@
+ import { toast } from './toast.js';
++import { requireLogin } from './ui.js';
+ import { pickItemsDialog } from './dialog.js';
+ import { fetchLists, pickList, listLabel, addItems, setLastListId } from './shopping-api.js';
+ 
+@@ -12,6 +13,7 @@ const textOf = row => row.querySelector(':scope > p')?.textContent.replace(/\s+/
+ async function addOne(button) {
+     const text = textOf(button.closest(INGREDIENT));
+     if (!text) return;
++    if (!await requireLogin('keep a shopping list')) return;
+ 
+     button.disabled = true;
+     try {
+@@ -34,8 +36,12 @@ async function addOne(button) {
+ // ---- add all: choose ingredients and list ------------------------------------
+ 
+ async function addAll() {
+-    const texts = [...document.querySelectorAll(INGREDIENT)].map(textOf).filter(Boolean);
+-    if (!texts.length) return;
++    const texts = [...document.querySelectorAll(`#expanded-modal ${INGREDIENT}`)].map(textOf).filter(Boolean);
++    if (!texts.length) {
++        toast.info('This recipe has no ingredients to add');
++        return;
++    }
++    if (!await requireLogin('keep a shopping list')) return;
+ 
+     let lists;
+     try {
+@@ -67,11 +73,13 @@ async function addAll() {
+ // ---- wiring --------------------------------------------------------------------
+ 
+ export function init() {
+-    console.log('initAddToList');
+     // Delegated, so it also works for ingredients your JS renders later
+     document.addEventListener('click', event => {
+         const addButton = event.target.closest('.ingredient-add-button');
+-        if (addButton) return addOne(addButton);
++        if (addButton) {
++            event.stopPropagation();   // don't also tick the ingredient off
++            return addOne(addButton);
++        }
+ 
+         if (event.target.closest('.add-all-button')) addAll();
+     });
+diff --git a/src/assets/edit-recipe.js b/src/assets/edit-recipe.js
+index a45e88e..05e2910 100644
+--- a/src/assets/edit-recipe.js
++++ b/src/assets/edit-recipe.js
+@@ -2,7 +2,7 @@ import { fillEditList } from './sections.js';
+ import { parseJson, fetchRecipeById } from './recipe-data.js'
+ import { showLoadedpreview } from './drag-and-drop.js';
+ import { toast } from './toast.js';
+-import { setRecipeTimes, readSaveResponse } from './add-recipe.js';
++import { setRecipeTimes, readSaveResponse, setFormTags } from './add-recipe.js';
+ 
+ let addForm = null;
+ 
+@@ -18,7 +18,8 @@ const ingredientText = i =>
+         .filter(part => part !== null && part !== undefined && part !== '')
+         .join(' ');
+ 
+-export async function grabAndDisplayEdit(recipeId) {
++/** Fill the form with a recipe. mode "edit" changes it, "fork" saves a copy as your own. */
++export async function grabAndDisplayEdit(recipeId, mode = 'edit') {
+     let recipe;
+     try {
+         recipe = await fetchRecipeById(recipeId);
+@@ -35,9 +36,10 @@ export async function grabAndDisplayEdit(recipeId) {
+  
+     // Keep the form's id: recipe-data.js, form-router.js and add-recipe.js all look it up by #add-recipe-form
+     addForm.dataset.id = recipeId;
+-    addForm.querySelector('.form-title').textContent         = 'Edit recipe';
+-    addForm.querySelector('.save-recipe-button').textContent = 'Update recipe';
++    addForm.querySelector('.form-title').textContent         = mode === 'fork' ? 'Fork recipe' : 'Edit recipe';
++    addForm.querySelector('.save-recipe-button').textContent = mode === 'fork' ? 'Save my version' : 'Save changes';
+     addForm.querySelector('#name').value               = recipe.title ?? '';
++    setFormTags(parseJson(recipe.recipe_tags).map(t => t.name));
+     addForm.querySelector('#description').value        = recipe.description ?? '';
+     setRecipeTimes(addForm, recipe.prep_time_minutes, Math.max(0, total - prep));
+     addForm.querySelector('#servings').value           = recipe.servings ?? '';
+@@ -69,8 +71,9 @@ export async function grabAndDisplayEdit(recipeId) {
+         parseJson(recipe.recipe_step_sections),
+         step => step.content ?? '');
+  
+-    document.getElementById('expanded-modal').classList.toggle("hidden");
+-    document.getElementById('add-menu').classList.toggle("hidden");
++    // Close the recipe view properly (so Back and the cards keep working), then show the form
++    if (history.state?.type === 'recipe') history.back();
++    document.getElementById('add-menu').classList.remove("hidden");
+ }
+ 
+ export async function submitEdit(e) {
+@@ -86,8 +89,9 @@ export async function submitEdit(e) {
+         });
+         if (!await readSaveResponse(response, 'Failed to update recipe')) return;   // form stays open to fix
+ 
+-        document.getElementById('add-menu').classList.toggle("hidden");
+-        toast.success('Recipe updated successfully');
++        document.getElementById('add-menu').classList.add("hidden");
++        toast.success('Changes saved');
++        document.dispatchEvent(new CustomEvent('recipe:saved', { detail: { id: recipeId, open: true } }));
+     } catch (error) {
+         toast.error('Could not reach the server. Your changes are still in the form, try again.');
+     }
+diff --git a/src/assets/fork-recipe.js b/src/assets/fork-recipe.js
+index f14d5c6..3d9e144 100644
+--- a/src/assets/fork-recipe.js
++++ b/src/assets/fork-recipe.js
+@@ -3,9 +3,11 @@ import { toast } from './toast.js';
+ import { grabAndDisplayEdit } from './edit-recipe.js';
+ 
+ export async function forkRecipe(recipeId) {
+-    grabAndDisplayEdit(recipeId);
+     const addform = document.getElementById('add-recipe-form');
+     addform.dataset.mode = 'fork';
++    addform.dataset.recipeId = recipeId;
++    await grabAndDisplayEdit(recipeId, 'fork');
++    toast.info('Change anything you like, then save it as your own version.');
+ }
+ 
+ export async function submitFork(e) {
+@@ -21,10 +23,12 @@ export async function submitFork(e) {
+             method: 'POST',
+             body: formData
+         });
+-        if (!await readSaveResponse(response, 'Failed to fork recipe')) return;   // form stays open to fix
++        const result = await readSaveResponse(response, 'Failed to fork recipe');
++        if (!result) return;   // form stays open to fix
+ 
+-        document.getElementById('add-menu').classList.toggle("hidden");
+-        toast.success('Recipe forked successfully');
++        document.getElementById('add-menu').classList.add("hidden");
++        toast.success('Your version is saved in your kitchen');
++        document.dispatchEvent(new CustomEvent('recipe:saved', { detail: { id: Number(result.recipe_id), open: true } }));
+     } catch (error) {
+         toast.error('Could not reach the server. Your recipe is still in the form, try again.');
+     }
+diff --git a/src/assets/landing-page.js b/src/assets/landing-page.js
+index e83ae6e..6cd8a98 100644
+--- a/src/assets/landing-page.js
++++ b/src/assets/landing-page.js
+@@ -1,56 +1,119 @@
++// assets/landing-page.js
++// Only loaded for visitors who aren't logged in (main.js loads it when #login-modal exists).
++// The log in / sign up dialog, and "log in to do this" for the add button.
++
+ import { guardFileInput, showPhotoMessage } from './photo-check.js';
++import { requireLogin, openLogin } from './ui.js';
+ 
+ let loginModal = null;
+-let loginModalExpanded = false;
+-let personalRecipeButton = null;
+ 
+ export function init(targetElement) {
+-    personalRecipeButton = targetElement.querySelector("#personal-recipes");
+-    if (personalRecipeButton) {
+-        personalRecipeButton.classList.remove('active');
+-        const publicRecipeButton = targetElement.querySelector("#public-recipes");
+-        publicRecipeButton.classList.add('active');
++    loginModal = targetElement;
++
++    // Visitors see Discover: their own kitchen needs an account
++    const personal = document.getElementById('personal-recipes');
++    if (personal) {
++        personal.classList.remove('active');
++        document.getElementById('public-recipes')?.classList.add('active');
+     }
+ 
+-    loginModal = targetElement;
++    document.getElementById('log-in')?.addEventListener('click', () => openLogin('login'));
++    document.getElementById('add-button')?.addEventListener('click', () => requireLogin('add your own recipes'));
+ 
+-    initEventListeners();
+-    const signupForm = targetElement.querySelector('#signup-form');
+-    const photoInput = signupForm.querySelector('input[type="file"]');
+-    const photoMessage = signupForm.querySelector('#signup-photo-message');
+-    // A photo that won't work is refused as soon as it's chosen; signing up without one is fine
+-    guardFileInput(photoInput, photoMessage, 'You can still sign up without one.');
++    initTabs();
++    initLogin();
++    initSignup();
+ 
+-    signupForm.addEventListener('submit', async (e) => {
+-        e.preventDefault();
+-        const response = await fetch('/auth/signup.php', {
+-            method: 'POST',
+-            body: new FormData(signupForm)
++    // Pages without the dialog send people to /?login=1 (see ui.js openLogin)
++    if (new URLSearchParams(location.search).has('login')) {
++        history.replaceState(history.state, '', location.pathname);
++        openLogin('login');
++    }
++}
++
++function initTabs() {
++    const tabs = loginModal.querySelectorAll('[data-tab]');
++    const show = (name) => {
++        tabs.forEach(tab => {
++            const on = tab.dataset.tab === name;
++            tab.classList.toggle('selected', on);
++            tab.setAttribute('aria-selected', String(on));
+         });
++        loginModal.querySelectorAll('[data-tab-panel]').forEach(panel => {
++            panel.hidden = panel.dataset.tabPanel !== name;
++        });
++        loginModal.querySelector(`[data-tab-panel="${name}"] input`)?.focus();
++    };
++    tabs.forEach(tab => tab.addEventListener('click', () => show(tab.dataset.tab)));
++    loginModal.addEventListener('login:tab', (e) => show(e.detail));
++}
+ 
+-        if (response.ok) {
+-            window.location.href = '/';
+-            return;
+-        }
+-        // signup.php answers with a plain sentence (bad username, short password, photo problem...)
+-        const reason = (await response.text()).trim() || 'Sign-up failed. Check the form and try again.';
+-        if (response.status === 413 || /photo/i.test(reason)) {
+-            photoInput.value = '';
+-            showPhotoMessage(photoMessage, { error: reason });
+-        } else {
+-            showPhotoMessage(photoMessage, null);
+-            alert(reason);
+-        }
+-    });
+-};
++function showFormError(form, message) {
++    const box = form.querySelector('.form-error');
++    box.textContent = message || '';
++    box.hidden = !message;
++}
+ 
+-function initEventListeners() {
+-    document.getElementById('log-in').addEventListener('click', toggleLogin);
+-    if (personalRecipeButton) {
+-        personalRecipeButton.addEventListener('click', toggleLogin);
++async function submitWithFeedback(form, send) {
++    const button = form.querySelector('button[type="submit"]');
++    const label = button.textContent;
++    button.disabled = true;
++    button.textContent = 'One moment…';
++    showFormError(form, '');
++    try {
++        await send();
++    } catch {
++        showFormError(form, 'Could not reach the server. Check your connection and try again.');
++    } finally {
++        button.disabled = false;
++        button.textContent = label;
+     }
+ }
+ 
+-function toggleLogin() {
+-    loginModal.classList.toggle('hidden');
+-}
+\ No newline at end of file
++function initLogin() {
++    const form = loginModal.querySelector('#login-form');
++    form.addEventListener('submit', (e) => {
++        e.preventDefault();
++        submitWithFeedback(form, async () => {
++            const response = await fetch(form.action, {
++                method: 'POST',
++                headers: { Accept: 'application/json' },
++                body: new FormData(form),
++            });
++            const result = await response.json().catch(() => ({}));
++            if (response.ok && result.success) {
++                location.reload();             // the same page, now logged in
++                return;
++            }
++            showFormError(form, result.error || 'Could not log in. Try again.');
++            form.querySelector('#login-password').select();
++        });
++    });
++}
++
++function initSignup() {
++    const form = loginModal.querySelector('#signup-form');
++    const photoInput = form.querySelector('input[type="file"]');
++    const photoMessage = form.querySelector('#signup-photo-message');
++    // A photo that won't work is refused as soon as it's chosen; signing up without one is fine
++    guardFileInput(photoInput, photoMessage, 'You can still sign up without one.');
++
++    form.addEventListener('submit', (e) => {
++        e.preventDefault();
++        submitWithFeedback(form, async () => {
++            const response = await fetch('/auth/signup.php', { method: 'POST', body: new FormData(form) });
++            if (response.ok) {
++                location.href = '/';
++                return;
++            }
++            // signup.php answers with a plain sentence (taken name, short password, photo...)
++            const reason = (await response.text()).trim() || 'Sign-up failed. Check the form and try again.';
++            if (response.status === 413) {
++                photoInput.value = '';
++                showPhotoMessage(photoMessage, { error: reason });
++            } else {
++                showFormError(form, reason);
++            }
++        });
++    });
++}
+diff --git a/src/assets/list.js b/src/assets/list.js
+index 74f66b1..4c53983 100644
+--- a/src/assets/list.js
++++ b/src/assets/list.js
+@@ -12,6 +12,7 @@
+ import { request, ITEMS_API, LISTS_API, listLabel, getLastListId, setLastListId } from './shopping-api.js';
+ import { toast } from './toast.js';
+ import { confirmDialog, promptDialog } from './dialog.js';
++import { onLongPress } from './ui.js';
+ 
+ const POLL_EVERY_MS = 4000;
+ const ARCHIVE_DELAY_MS = 600;   // how long a checked item stays struck through in the list before it moves
+@@ -111,10 +112,19 @@ function createShoppingList(modal, firstListId) {
+             .then(() => row.classList.remove('save-failed'))
+             .catch(error => {
+                 row.classList.add('save-failed');
++                toastSaveFailure();
+             })
+             .finally(() => { savesInFlight--; });
+     }
+ 
++    // One toast for a burst of failed saves (e.g. offline), not one per keystroke
++    let lastFailureToast = 0;
++    function toastSaveFailure() {
++        if (Date.now() - lastFailureToast < 5000) return;
++        lastFailureToast = Date.now();
++        toast.error('A change to the list didn’t save. Check your connection; it’s marked in red.');
++    }
++
+     function send(body) {
+         return request(ITEMS_API, { method: 'POST', body: { list_id: currentListId, ...body } });
+     }
+@@ -332,7 +342,6 @@ function createShoppingList(modal, firstListId) {
+         const row = input.closest(ROW);
+ 
+         if (event.key === 'Enter') {
+-            console.log('Enter pressed in row', row.dataset.id, 'with text', input.value);
+             event.preventDefault();
+             if (input.value.trim() === '') return;
+             commit(row);
+@@ -356,6 +365,19 @@ function createShoppingList(modal, firstListId) {
+     }
+ 
+     document.addEventListener('change', onChange);
++
++    // Hold an item: edit it (select all, ready to retype). On phones a tap only places the cursor,
++    // so this is the quick way to change an item. A checked item is put back on the list first.
++    onLongPress(modal, ROW, row => {
++        const input = inputOf(row);
++        if (!row.dataset.id) { input.focus(); return; }
++        if (row.classList.contains('checked')) toggleChecked(row, false);
++        row.classList.add('is-editing');
++        input.readOnly = false;
++        input.focus();
++        input.select();
++    });
++    modal.addEventListener('focusout', e => e.target.closest(ROW)?.classList.remove('is-editing'));
+     // archive.addEventListener('change', onChange);
+ 
+     // ---- start -------------------------------------------------------------
+@@ -415,6 +437,72 @@ export async function init(modal) {
+         renderPicker(picker, lists, currentId);
+         const list = createShoppingList(modal, currentId);
+         
++        const title = modal.querySelector('.sl-title');
++        const renameButton = modal.querySelector('.sl-rename');
++        const currentList = () => lists.find(item => String(item.id) === currentId);
++        const showTitle = () => {
++            const current = currentList();
++            title.textContent = current ? current.name : 'Shopping list';
++            title.title = current?.is_owner ? 'Hold or double-click to rename' : `Shared by ${current?.owner_username ?? 'someone else'}`;
++            if (renameButton) renameButton.hidden = !current?.is_owner;
++        };
++
++        // Rename in place: the title becomes a text field. Enter or leaving saves, Escape cancels.
++        function startRename() {
++            const current = currentList();
++            if (!current) return;
++            if (!current.is_owner) {
++                toast.info(`Only ${current.owner_username ?? 'the owner'} can rename this list`);
++                return;
++            }
++            if (title.querySelector('input')) return;
++
++            const field = document.createElement('input');
++            field.className = 'sl-title-input';
++            field.value = current.name;
++            field.maxLength = 255;
++            field.setAttribute('aria-label', 'List name');
++            title.replaceChildren(field);
++            field.focus();
++            field.select();
++
++            let done = false;
++            const finish = async (save) => {
++                if (done) return;
++                done = true;
++                const name = field.value.trim();
++                if (!save || !name || name === current.name) { showTitle(); return; }
++
++                const old = current.name;
++                current.name = name;                      // show it right away
++                showTitle();
++                renderPicker(picker, lists, currentId);
++                try {
++                    await request(LISTS_API, { method: 'POST', body: { action: 'rename', list_id: current.id, list_name: name } });
++                    toast.success('List renamed');
++                } catch {
++                    current.name = old;                   // put it back
++                    showTitle();
++                    renderPicker(picker, lists, currentId);
++                    toast.error('Could not rename the list');
++                }
++            };
++            field.addEventListener('keydown', e => {
++                e.stopPropagation();
++                if (e.key === 'Enter') { e.preventDefault(); finish(true); }
++                if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(false); }
++            });
++            field.addEventListener('blur', () => finish(true));
++        }
++
++        onLongPress(modal, '.sl-title', startRename);
++        title.addEventListener('dblclick', startRename);
++        title.addEventListener('keydown', e => {
++            if (e.target !== title) return;   // keys typed in the rename field bubble up here too
++            if (e.key === 'F2' || e.key === 'Enter') { e.preventDefault(); startRename(); }
++        });
++        renameButton?.addEventListener('click', startRename);
++
+         const deleteButton = modal.querySelector(DELETE_BUTTON);
+         const shareButton = modal.querySelector(SHARE_BUTTON);
+         const sharePanel = modal.querySelector(SHARE_PANEL);
+@@ -424,6 +512,7 @@ export async function init(modal) {
+             if (deleteButton) deleteButton.hidden = !isOwner;
+             if (shareButton) shareButton.hidden = !isOwner;
+             if (sharePanel) sharePanel.hidden = true;   // closed whenever the list changes
++            showTitle();
+         }
+         showOwnerControls();
+ 
+@@ -450,6 +539,7 @@ export async function init(modal) {
+                 renderPicker(picker, lists, currentId);
+                 showOwnerControls();
+                 list.switchList(currentId);
++                toast.success(`Created "${name}"`);
+             } catch (error) {
+                 picker.value = currentId;
+                 toast.error('Could not create the list');
+@@ -459,7 +549,7 @@ export async function init(modal) {
+         deleteButton?.addEventListener('click', async () => {
+             const current = lists.find(item => String(item.id) === currentId);
+             if (!current?.is_owner) return;
+-            if (!await confirmDialog({ title: 'Delete list', message: `Delete "${current.name}" and everything on it? This can't be undone.` })) return;
++            if (!await confirmDialog({ title: 'Delete list', message: `Delete "${current.name}" and everything on it? This can't be undone.`, confirmText: 'Delete', danger: true })) return;
+ 
+             try {
+                 await request(LISTS_API, { method: 'POST', body: { action: 'delete', list_id: current.id } });
+@@ -473,6 +563,7 @@ export async function init(modal) {
+                 renderPicker(picker, lists, currentId);
+                 showOwnerControls();
+                 list.switchList(currentId);
++                toast.success(`Deleted "${current.name}"`);
+             } catch (error) {
+                 toast.error('Could not delete the list');
+             }
+@@ -507,6 +598,7 @@ export async function init(modal) {
+                     method: 'POST',
+                     body: { action: checkbox.checked ? 'share' : 'unshare', list_id: currentId, group_id: checkbox.value }
+                 });
++                toast.success(checkbox.checked ? 'Shared with the group' : 'No longer shared with the group');
+             } catch (error) {
+                 checkbox.checked = !checkbox.checked;   // put it back
+                 toast.error('Could not change sharing');
+diff --git a/src/assets/main.js b/src/assets/main.js
+index a3eab7f..5f53657 100644
+--- a/src/assets/main.js
++++ b/src/assets/main.js
+@@ -42,6 +42,7 @@ document.addEventListener('DOMContentLoaded', () => {
+ 
+     if (dragDrop.init) dragDrop.init(element);
+     if (addRecipe.init) addRecipe.init(element);
++    if (sections.init) sections.init(element);   // Enter adds a row, Backspace removes it, arrows move between rows
+   });
+ 
+   // 3. Recipe Search & Suggestions
+@@ -63,9 +64,14 @@ document.addEventListener('DOMContentLoaded', () => {
+   loadModuleIfPresent('#shopping-list-modal', () => import('./list.js'));
+ 
+   const profileModal = document.getElementById('profile-modal');
+-  if (profileModal) {
+-      document.querySelector('.current-user').addEventListener('click', () => {
+-          profileModal.classList.toggle('hidden');
++  const avatar = document.querySelector('.current-user');
++  if (profileModal && avatar) {
++      const toggleProfile = () => profileModal.classList.toggle('hidden');
++      avatar.addEventListener('click', toggleProfile);
++      avatar.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleProfile(); } });
++      // Click anywhere else closes the little profile menu
++      document.addEventListener('click', e => {
++          if (!profileModal.contains(e.target) && !avatar.contains(e.target)) profileModal.classList.add('hidden');
+       });
+   }
+   
+@@ -92,11 +98,28 @@ toggle?.addEventListener('click', () => {
+ media.addEventListener('change', syncToggle);
+ syncToggle();
+ 
++// The dark backdrop belongs to the recipe view; the login dialog borrows it
++function hideOverlayIfUnused() {
++  const recipeOpen = !document.getElementById('expanded-modal')?.classList.contains('hidden');
++  const loginOpen = document.getElementById('login-modal') && !document.getElementById('login-modal').classList.contains('hidden');
++  if (!recipeOpen && !loginOpen) document.getElementById('modal-overlay')?.classList.add('hidden');
++}
++
++function closeModal(modal) {
++  if (!modal || modal.id === 'expanded-modal') return;   // the recipe view closes through history (recipe-modal.js)
++  modal.classList.add('hidden');
++  hideOverlayIfUnused();
++}
++
+ document.addEventListener('click', (e) => {
+-  if (e.target.matches('.close-button')) {
+-    const modal = e.target.closest('.modal');
+-    if (modal) {
+-      modal.classList.add('hidden');
+-    }
+-  }
++  const close = e.target.closest('.close-button');
++  if (close) closeModal(close.closest('.modal'));
++  if (e.target.id === 'modal-overlay') closeModal(document.getElementById('login-modal'));
++});
++
++// Escape closes the top small window (shopping list, groups, filters...). Native dialogs handle their own.
++document.addEventListener('keydown', (e) => {
++  if (e.key !== 'Escape' || document.querySelector('dialog[open]')) return;
++  const open = [...document.querySelectorAll('.modal:not(.hidden)')].filter(m => m.id !== 'expanded-modal');
++  if (open.length) closeModal(open[open.length - 1]);
+ });
+\ No newline at end of file
+diff --git a/src/assets/meta-data-loader.js b/src/assets/meta-data-loader.js
+index a877251..312c9ca 100644
+--- a/src/assets/meta-data-loader.js
++++ b/src/assets/meta-data-loader.js
+@@ -38,7 +38,6 @@ function renderRecipeMetaData(metadata) {
+ 
+     const courseTypes = metadata.courseTypes || [];
+ 
+-    console.log("course dropdown", courseDropdown);
+ 
+     if (courseDropdown.length > 0) {
+         courseTypes.forEach(tag => {
+diff --git a/src/assets/popstate.js b/src/assets/popstate.js
+index 06fa27c..4f0423e 100644
+--- a/src/assets/popstate.js
++++ b/src/assets/popstate.js
+@@ -1,29 +1,11 @@
+ import { closeRecipe, expandRecipe } from "./recipe-modal.js";
+ 
+-// Helper to open recipe and push browser state
+-export function openRecipeModal(slug) {
+-    history.pushState({ type: 'recipe', slug }, '', `/recipe/${slug}`);
+-    expandRecipe(slug);
+-}
+-
+-// 1. Popstate listener (Handles Back/Forward navigation)
++// Back / Forward: open the recipe in that history entry, or close the recipe view.
++// (Opening /recipe/42 directly is handled once, in recipe-modal.js init().)
+ window.addEventListener('popstate', (event) => {
+-    // Check history state directly instead of relying on a global variable
+     if (event.state && event.state.type === 'recipe') {
+         expandRecipe(event.state.slug);
+     } else {
+-        // If state is empty or not a recipe, we've navigated back to the base page
+         closeRecipe();
+     }
+ });
+-
+-// 2. Initial Page Load (Handles direct URLs & Page Refreshes)
+-document.addEventListener('DOMContentLoaded', () => {
+-    const path = window.location.pathname;
+-    const recipeMatch = path.match(/^\/recipe\/([^\/]+)/);
+-
+-    if (recipeMatch) {
+-        const slug = recipeMatch[1];
+-        expandRecipe(slug);
+-    }
+-});
+\ No newline at end of file
+diff --git a/src/assets/recipe-cards.js b/src/assets/recipe-cards.js
+index 919d0b7..0beba43 100644
+--- a/src/assets/recipe-cards.js
++++ b/src/assets/recipe-cards.js
+@@ -75,7 +75,7 @@ export function getRecipeHtml(recipe) {
+     const ownerFull = avatarUrl(recipe.owner_username, recipe.owner_image, '');
+ 
+     return `
+-        <div class="recipe-card" data-id="${Number(recipe.id)}" data-course="${escapeHtml(course)}">
++        <div class="recipe-card" data-id="${Number(recipe.id)}" data-course="${escapeHtml(course)}" tabindex="0" aria-label="${escapeHtml(recipe.title)}">
+             ${recipe.is_owner ? '' : `<img class="owner-image" src="${ownerAvatar}" data-fallback="${ownerFull}" alt="${escapeHtml(recipe.owner_username)}" title="by ${escapeHtml(recipe.owner_username)}" loading="lazy">`}
+             <div class="recipe-image-container">${getRecipeImage(recipe, '_600')}</div>
+             <div class="recipe-content">
+@@ -84,7 +84,7 @@ export function getRecipeHtml(recipe) {
+                     <span>${escapeHtml(capitalize(course))}</span>
+                 </div>
+                 <h3>${escapeHtml(recipe.title)}</h3>
+-                ${recipe.is_owner ? '' : `<div class="saves ${recipe.is_saved ? 'filled' : ''}"><span class="material-symbols-outlined bookmark-icon">bookmark</span></div>`}
++                ${recipe.is_owner ? '' : `<button type="button" class="saves ${recipe.is_saved ? 'filled' : ''}" aria-pressed="${Boolean(recipe.is_saved)}" aria-label="Save ${escapeHtml(recipe.title)}" title="Save"><span class="material-symbols-outlined bookmark-icon">bookmark</span></button>`}
+                 ${getMatchHtml(recipe)}
+                 ${getTagsHtml(recipe)}
+             </div>
+diff --git a/src/assets/recipe-modal.js b/src/assets/recipe-modal.js
+index 9f10328..21443fa 100644
+--- a/src/assets/recipe-modal.js
++++ b/src/assets/recipe-modal.js
+@@ -1,10 +1,14 @@
+-import { handleEdit } from './edit-recipe.js';
+-import { escapeHtml, getRecipeImage, avatarUrl } from './recipe-cards.js';
++// assets/recipe-modal.js
++// The recipe view: opening a recipe (from a card, the pick card, a link or the back button),
++// and everything you can do in it: save, share, fork, edit, delete, tick off ingredients.
+ 
++import { handleEdit } from './edit-recipe.js';
++import { escapeHtml, getRecipeImage, avatarUrl, getCourseName, formatMinutes } from './recipe-cards.js';
+ import { fetchRecipeById, parseJson, groupBySection } from './recipe-data.js';
+ import { toast } from './toast.js';
+ import { confirmDialog } from './dialog.js';
+ import { forkRecipe } from './fork-recipe.js';
++import { api, requireLogin, copyText, bumpCount, plural } from './ui.js';
+ 
+ // Only real web links become clickable: a saved "javascript:..." link would run on click
+ function safeHttpUrl(value) {
+@@ -17,6 +21,10 @@ function safeHttpUrl(value) {
+ }
+ 
+ let overlay, expandedModal, expanded = false;
++let current = null;          // the recipe on screen
++let openToken = 0;           // ignore slow answers for a recipe the user already left
++
++const dialogOpen = () => Boolean(document.querySelector('dialog[open]'));
+ 
+ export function init() {
+     overlay = document.getElementById('modal-overlay');
+@@ -24,52 +32,90 @@ export function init() {
+     if (!expandedModal) return; // page has no modal
+ 
+     document.addEventListener('click', (e) => {
+-        const saveButton = e.target.closest('.saves');
++        // Outside the recipe = on the dark backdrop. Clicks in dialogs, toasts or menus opened
++        // from the recipe (like "Add to list") are not "outside" and must not close it.
++        if (expanded) {
++            if (e.target === overlay && !dialogOpen()) history.back();
++            return;
++        }
++        const saveButton = e.target.closest('.recipe-card .saves');
+         const card = e.target.closest('.recipe-card');
+-        const modal = e.target.closest('#expanded-modal');
+-
+-        if (expanded && !modal) {
+-            history.back();
+-        } else if (saveButton) {
+-            handleSave(parseInt(saveButton.closest('.recipe-card').dataset.id), saveButton);
++        if (saveButton) {
++            handleSave(parseInt(card.dataset.id));
+         } else if (card) {
+-            const id = parseInt(card.dataset.id);
+-            if (id) { 
+-                pushRecipeState(id);
+-                expandRecipe(id);
+-            }
++            openRecipe(parseInt(card.dataset.id));
+         }
+     });
+ 
++    // Cards can be opened with the keyboard too
+     document.addEventListener('keydown', (e) => {
+-        if (e.key === 'Escape' && expanded) history.back();
++        if (e.key === 'Escape' && expanded && !dialogOpen()) history.back();
++        const card = e.target.closest?.('.recipe-card');
++        if (card && !expanded && (e.key === 'Enter' || e.key === ' ') && e.target === card) {
++            e.preventDefault();
++            openRecipe(parseInt(card.dataset.id));
++        }
+     });
+ 
+     expandedModal.addEventListener('click', async (e) => {
+-        if (e.target.id === 'edit-recipe-button')   await handleEdit(parseInt(e.target.dataset.id));
+-        if (e.target.id === 'delete-recipe-button') await handleDelete(parseInt(e.target.dataset.id));
+-        if (e.target.classList.contains('close-button'))       window.history.back();
+-        if (e.target.classList.contains('save-recipe-button')) await handleSave(parseInt(e.target.dataset.id));
+-        if (e.target.classList.contains('ingredient-checkbox')) {
+-            e.target.classList.toggle('checked');
+-            e.target.innerHTML = e.target.classList.contains('checked') ? 'check_circle' : 'circle';
++        const target = e.target.closest('button, a, .ingredient-item');
++        if (!target || !current) return;
++        const id = current.id;
++
++        if (target.classList.contains('close-button'))   return history.back();
++        if (target.id === 'edit-recipe-button')         return handleEdit(id);
++        if (target.id === 'delete-recipe-button')       return handleDelete(id);
++        if (target.classList.contains('rv-save'))       return handleSave(id);
++        if (target.classList.contains('rv-share'))      return shareRecipe(current);
++        if (target.id === 'fork-recipe-button') {
++            if (await requireLogin('fork recipes and make your own version')) forkRecipe(id);
++            return;
+         }
+-        if (e.target.id === 'fork-recipe-button') {
+-            const recipeId = parseInt(e.target.dataset.id);
+-            await forkRecipe(recipeId);
++        if (target.classList.contains('forked-from-link')) {
++            e.preventDefault();
++            return openRecipe(parseInt(target.dataset.id));
+         }
++        // Tap an ingredient to tick it off (the + button adds it to the shopping list instead)
++        if (target.classList.contains('ingredient-item')) toggleIngredient(target);
+     });
+ 
+-    // direct link: /recipe/42
++    expandedModal.addEventListener('keydown', (e) => {
++        const item = e.target.closest('.ingredient-item');
++        if (item && (e.key === 'Enter' || e.key === ' ') && e.target === item) {
++            e.preventDefault();
++            toggleIngredient(item);
++        }
++    });
++
++    // After adding, editing or forking: show the result
++    document.addEventListener('recipe:saved', (e) => {
++        if (e.detail?.open && e.detail.id) openRecipe(e.detail.id);
++    });
++
++    // Direct link: /recipe/42
+     const match = location.pathname.match(/\/recipe\/(\d+)/);
+     if (match) {
+         history.replaceState({ type: 'home' }, '', '/');
+-        const id = parseInt(match[1]);
+-        pushRecipeState(id);
+-        expandRecipe(id);
++        openRecipe(parseInt(match[1]));
+     }
+ }
+ 
++/** Open a recipe and add it to the browser history, so Back closes it. */
++export function openRecipe(id) {
++    if (!id) return;
++    if (expanded) history.replaceState({ type: 'recipe', slug: id }, '', `/recipe/${id}`);   // recipe -> recipe: one Back
++    else pushRecipeState(id);
++    expandRecipe(id);
++}
++
++function toggleIngredient(item) {
++    const on = item.getAttribute('aria-pressed') !== 'true';
++    item.setAttribute('aria-pressed', String(on));
++    const icon = item.querySelector('.ingredient-checkbox');
++    icon.classList.toggle('checked', on);
++    icon.textContent = on ? 'check_circle' : 'circle';
++}
++
+ function formatMacro(value) {
+     if (value >= 10) return Math.round(value).toString();   
+     if (value >= 1)  return value.toFixed(1);               
+@@ -132,6 +178,14 @@ function renderMacroWheel(macrosContainer, ingredientMacrosJson, servings = 1) {
+         return t;
+     }, { calories: 0, protein: 0, carbs: 0, fat: 0 });
+ 
++    // Nothing matched the nutrition database: say so instead of drawing a ring of zeros
++    const section = macrosContainer.closest('.macros');
++    if (!included.length) {
++        macrosContainer.innerHTML = '<p class="rv-muted">No nutrition data for these ingredients yet.</p>';
++        return null;   // no "?" on every ingredient either: the note above already says it
++    }
++    section?.removeAttribute('hidden');
++
+     const protKcal  = totals.protein * 4;
+     const carbKcal  = totals.carbs   * 4;
+     const fatKcal   = totals.fat     * 9;
+@@ -197,6 +251,7 @@ function renderMacroWheel(macrosContainer, ingredientMacrosJson, servings = 1) {
+     };
+ }
+ 
++
+ export function pushRecipeState(id) {
+     history.pushState({ type: 'recipe', slug: id }, '', `/recipe/${id}`);
+ }
+@@ -205,42 +260,42 @@ function renderIngredients(ingredientsEl, recipeIngredients, recipeSections, cov
+     const ingredients = parseJson(recipeIngredients);
+ 
+     if (!ingredients.length) {
+-        ingredientsEl.innerHTML = '<p>No ingredients listed.</p>';
++        ingredientsEl.innerHTML = '<p class="rv-muted">No ingredients listed.</p>';
+         return;
+     }
+ 
+     const groups = groupBySection(ingredients, parseJson(recipeSections));
+ 
+     ingredientsEl.innerHTML = renderGrouped(groups, ingredient => {
+-        const amount = ingredient.amount ?? '';
++        const amount = ingredient.amount != null ? formatAmount(ingredient.amount) + ' ' : '';
+         const unit   = ingredient.unit ? ingredient.unit + ' ' : '';
+         const size   = ingredient.size ? ingredient.size + ' ' : '';
+         const name   = ingredient.name;   // raw name for the coverage lookup
+ 
+         let badge = '';
+-        if (coverage) {
+-            if (coverage.included.has(name)) {
+-                badge = `<span class="ingredient-macro-badge included" title="Included in calorie calculation">
+-                            <span class="material-symbols-outlined">fitness_center</span>
+-                         </span>`;
+-            } else if (coverage.skipped.has(name)) {
+-                badge = `<span class="ingredient-macro-badge skipped" title="No nutrition data available">
+-                            <span class="material-symbols-outlined">question_mark</span>
+-                         </span>`;
+-            }
++        if (coverage?.skipped.has(name)) {
++            badge = `<span class="ingredient-macro-badge skipped" title="Not counted in the nutrition (no data)">
++                        <span class="material-symbols-outlined">question_mark</span>
++                     </span>`;
+         }
+ 
+-        return `<div class="ingredient-item">
+-            <span class="material-symbols-outlined ingredient-checkbox">circle</span>
+-            <p>${escapeHtml(amount)} ${escapeHtml(unit)}${escapeHtml(size)}${escapeHtml(name)}</p>
++        return `<div class="ingredient-item" role="button" tabindex="0" aria-pressed="false">
++            <span class="material-symbols-outlined ingredient-checkbox" aria-hidden="true">circle</span>
++            <p>${escapeHtml(amount)}${escapeHtml(unit)}${escapeHtml(size)}${escapeHtml(name)}</p>
+             ${badge}
+-            <button class="ingredient-add-button" title="Add to shopping list" aria-label="Add to shopping list">
++            <button type="button" class="ingredient-add-button" title="Add to shopping list" aria-label="Add ${escapeHtml(name)} to shopping list">
+                 <span class="material-symbols-outlined">add</span>
+             </button>
+         </div>`;
+     });
+ }
+ 
++// 0.5 -> "0.5", 2 -> "2", 0.333333 -> "0.33"
++function formatAmount(value) {
++    const n = Number(value);
++    return Number.isFinite(n) ? String(Math.round(n * 100) / 100) : String(value);
++}
++
+ function renderGrouped(groups, renderItem) {
+     return groups.map(group => {
+         const heading = group.name
+@@ -254,7 +309,7 @@ function renderSteps(stepsEl, recipe) {
+     const steps = parseJson(recipe.recipe_steps);
+ 
+     if (!steps.length) {
+-        stepsEl.innerHTML = '<p>No instructions listed.</p>';
++        stepsEl.innerHTML = '<p class="rv-muted">No steps listed.</p>';
+         return;
+     }
+ 
+@@ -262,145 +317,185 @@ function renderSteps(stepsEl, recipe) {
+ 
+     stepsEl.innerHTML = renderGrouped(groups, step => {
+         const n = String(step.step_number).padStart(2, '0');
+-        return `<div class="flex">
+-            <div class="instruction-number-expanded">${n}</div>
++        return `<div class="flex rv-step">
++            <div class="instruction-number-expanded">${escapeHtml(n)}</div>
+             <p class="instruction-text">${escapeHtml(step.content)}</p>
+         </div>`;
+     });
+ }
+ 
+-export async function expandRecipe(recipeId) {
+-    expanded = true;
+-
+-    const id = recipeId;
+-    let recipe = await fetchRecipeById(recipeId);
+-    
+-    document.title = `${recipe.title} - food decider`;
+-
+-    // Grab all the DOM targets once
+-    const ingredientsEl  = expandedModal.querySelector('.ingredient-list');
+-    const macrosContainer = expandedModal.querySelector('.macro-list');
+-    const image          = expandedModal.querySelector('.expanded-recipe-image');
+-    const views          = expandedModal.querySelector('.views');
+-    const recipeActions  = expandedModal.querySelector('.recipe-actions');
+-    const title          = expandedModal.querySelector('.recipe-title');
+-    const description    = expandedModal.querySelector('.recipe-description');
+-    const steps          = expandedModal.querySelector('.steps');
+-    const time           = expandedModal.querySelector('.recipe-time');
+-    const tags           = expandedModal.querySelector('.recipe-tags');
+-    const recipeOwner    = expandedModal.querySelector('.recipe-owner');
+-    const courseText     = expandedModal.querySelector('.course-type');
+-    // const servings       = expandedModal.querySelector('.ingredient-servings');
+-
+-    // Render macro wheel first so we get coverage back
+-    const coverage = renderMacroWheel(macrosContainer, recipe.ingredient_macros, recipe.servings);
++// ── Header: who made it, numbers, buttons ────────────────────────────────────
+ 
+-    // Render ingredients with coverage badges
+-    renderIngredients(ingredientsEl, recipe.recipe_ingredients, recipe.recipe_ingredient_sections, coverage);
++function renderHeader(recipe) {
++    const q = sel => expandedModal.querySelector(sel);
+ 
+-    // servings.textContent = recipe.servings ? `${recipe.servings} servings` : '';
+-
+-    console.log('courseTypes', window.metadata.courseTypes);
++    q('.recipe-owner').innerHTML = `
++        <a class="recipe-userinfo" href="/user/${encodeURIComponent(recipe.owner_username)}">
++            <img class="owner-profile-pic" src="${avatarUrl(recipe.owner_username, recipe.owner_image)}"
++                 data-fallback="${avatarUrl(recipe.owner_username, recipe.owner_image, '')}" alt="">
++            <span>by <strong class="recipe-owner-username">${escapeHtml(recipe.owner_username)}</strong></span>
++        </a>`;
++
++    q('.recipe-title').textContent = recipe.title;
++    q('.recipe-description').textContent = recipe.description || '';
++
++    // Forked from another recipe: link to it (only sent when the original still exists and is visible)
++    const forked = q('.recipe-forked-from');
++    forked.hidden = !recipe.forked_from_id;
++    forked.innerHTML = recipe.forked_from_id
++        ? `<span class="material-symbols-outlined" aria-hidden="true">call_split</span>
++           Forked from <a href="/recipe/${Number(recipe.forked_from_id)}" class="forked-from-link" data-id="${Number(recipe.forked_from_id)}">${escapeHtml(recipe.forked_from_title)}</a>
++           ${recipe.forked_from_username ? `by ${escapeHtml(recipe.forked_from_username)}` : ''}`
++        : '';
++
++    const course = getCourseName(recipe);
++    q('.course-type').textContent = course ? course[0].toUpperCase() + course.slice(1) : '';
++    q('.views').textContent = plural(Number(recipe.view_count) || 0, 'view');
++    q('.views').dataset.count = Number(recipe.view_count) || 0;
++    q('.rv-saves').textContent = plural(Number(recipe.saves) || 0, 'save');
++    q('.rv-saves').dataset.count = Number(recipe.saves) || 0;
++    const forks = Number(recipe.fork_count) || 0;
++    q('.rv-forks').textContent = forks ? plural(forks, 'fork') : '';
++    q('.rv-forks').hidden = !forks;
++
++    const hasPrep = Number(recipe.prep_time_minutes) > 0;
++    const servings = Number(recipe.servings) || 0;
++    q('.recipe-time').innerHTML = `
++        ${hasPrep ? `<div class="recipe-time-section"><h5>Prep</h5><span>${formatMinutes(recipe.prep_time_minutes)}</span></div>` : ''}
++        <div class="recipe-time-section"><h5>${hasPrep ? 'Total' : 'Time'}</h5><span>${formatMinutes(recipe.total_time_minutes)}</span></div>
++        ${servings ? `<div class="recipe-time-section"><h5>Serves</h5><span>${servings}</span></div>` : ''}`;
++
++    q('.recipe-tags').innerHTML = parseJson(recipe.recipe_tags).map(t =>
++        `<a href="/results?q=${encodeURIComponent(t.name)}" class="pill">${escapeHtml(t.name)}</a>`).join('');
+ 
+-    courseText.textContent = window.metadata.courseTypes.get(recipe.course_types).name;
++    const link = safeHttpUrl(recipe.link);
++    const share = `<button type="button" class="btn rv-share"><span class="material-symbols-outlined" aria-hidden="true">share</span>Share</button>`;
++    q('.recipe-actions').innerHTML = recipe.is_owner
++        ? `<button type="button" class="btn p" id="edit-recipe-button"><span class="material-symbols-outlined" aria-hidden="true">edit</span>Edit</button>
++           ${share}
++           <button type="button" class="btn danger-quiet" id="delete-recipe-button"><span class="material-symbols-outlined" aria-hidden="true">delete</span>Delete</button>`
++        : `${saveButtonHtml(recipe.is_saved)}
++           ${share}
++           <button type="button" class="btn" id="fork-recipe-button"><span class="material-symbols-outlined" aria-hidden="true">call_split</span>Fork</button>
++           ${link ? `<a href="${escapeHtml(link)}" target="_blank" rel="noopener noreferrer nofollow" class="btn">
++               <span class="material-symbols-outlined" aria-hidden="true">open_in_new</span>Original</a>` : ''}`;
++}
+ 
+-    recipeOwner.innerHTML = `
+-        <a class="recipe-userinfo" href="/user/${encodeURIComponent(recipe.owner_username)}">
+-            <img class="owner-profile-pic"
+-                src="${avatarUrl(recipe.owner_username, recipe.owner_image)}"
+-                data-fallback="${avatarUrl(recipe.owner_username, recipe.owner_image, '')}"
+-                alt="">
+-            <div>
+-                <h4>Archived by</h4>
+-                <h4 class="recipe-owner-username">${escapeHtml(recipe.owner_username)}</h4>
+-            </div>
+-    </a>`;
++function saveButtonHtml(saved) {
++    return `<button type="button" class="btn p rv-save" aria-pressed="${saved}">
++        <span class="material-symbols-outlined" aria-hidden="true">bookmark</span>${saved ? 'Saved' : 'Save'}</button>`;
++}
+ 
+-    // Tag names are typed by users: escape them
+-    tags.innerHTML = parseJson(recipe.recipe_tags).map(t =>
+-        `<a href="/results?q=${encodeURIComponent(t.name)}" class="pill">${escapeHtml(t.name)}</a>`).join('');
++// ── Opening and closing ──────────────────────────────────────────────────────
+ 
+-    // Prep is optional (see the "Split into prep and cook" switch): only show it when it was given
+-    const hasPrep = recipe.prep_time_minutes != null && Number(recipe.prep_time_minutes) > 0;
+-    time.innerHTML = `
+-        ${hasPrep ? `<div class="recipe-time-section">
+-            <h5>PREP TIME</h5>
+-            <span>${Number(recipe.prep_time_minutes)} Mins</span>
+-        </div>
+-        <span class="divider"></span>` : ''}
+-        <div class="recipe-time-section">
+-            <h5>TOTAL TIME</h5>
+-            <span>${Number(recipe.total_time_minutes) || 0} Mins</span>
+-        </div>
+-        <span class="divider"></span>
+-        <div class="recipe-time-section">
+-            <h5>SERVINGS</h5>
+-            <span>${Number(recipe.servings) > 1 ? Number(recipe.servings) + ' Servings' : '1 Serving'}</span>
+-        </div>
+-    `;
+-        
+-
+-    title.textContent       = recipe.title;
+-    description.textContent = recipe.description;
+-    image.innerHTML         = getRecipeImage(recipe);
+-    views.innerHTML         = `<span class="material-symbols-outlined">visibility</span><p>${Number(recipe.view_count) || 0} views</p>`;
+-
+-    renderSteps(steps, recipe);
+-
+-    recipeActions.innerHTML = recipe.is_owner
+-        ? `<button class="recipe-action-button" id="edit-recipe-button" data-id="${id}">Edit Recipe</button>
+-           <button class="recipe-action-button" id="delete-recipe-button" data-id="${id}">Delete Recipe</button>`
+-        : `<button class="add-button ${recipe.is_saved ? 'filled' : ''}" data-id="${id}">
+-               <span class="material-symbols-outlined">bookmark</span>
+-               ${recipe.is_saved ? 'Remove from favorites' : 'Save to Favorites'}
+-           </button>
+-           ${safeHttpUrl(recipe.link) ? `<a href="${escapeHtml(safeHttpUrl(recipe.link))}" target="_blank" rel="noopener noreferrer nofollow" class="external-link-button">
+-               <span class="material-symbols-outlined">open_in_new</span>Open Recipe External Link
+-           </a>` : ''}
+-           <button class="recipe-action-button" id="fork-recipe-button" data-id="${id}">
+-               <span class="material-symbols-outlined">call_split</span> Fork Recipe
+-           </button>
+-           `;
+-
+-    expandedModal.classList.remove("hidden");
++export async function expandRecipe(recipeId) {
++    if (!expandedModal) return;   // page without a recipe view
++    const token = ++openToken;
++    expanded = true;
++    expandedModal.classList.add('is-loading');
++    expandedModal.classList.remove('hidden');
+     overlay.classList.remove('hidden');
+ 
+-    fetch('/api/recipes/register_view.php', {
+-        method: 'POST',
+-        headers: { 'Content-Type': 'application/json' },
+-        body: JSON.stringify({ recipe_id: id })
+-    });
++    let recipe;
++    try {
++        recipe = await fetchRecipeById(recipeId);
++        if (!recipe) throw new Error('This recipe doesn’t exist any more, or it’s private.');
++    } catch (error) {
++        if (token !== openToken) return;
++        toast.error(error.message || 'Could not open the recipe');
++        if (history.state?.type === 'recipe') history.back(); else closeRecipe();
++        return;
++    }
++    if (token !== openToken) return;   // the user opened another recipe or closed this one meanwhile
++
++    current = recipe;
++    document.title = `${recipe.title} - FoodDecider`;
++
++    expandedModal.querySelector('.macros').hidden = false;
++    const coverage = renderMacroWheel(expandedModal.querySelector('.macro-list'), recipe.ingredient_macros, recipe.servings);
++    renderIngredients(expandedModal.querySelector('.ingredient-list'), recipe.recipe_ingredients, recipe.recipe_ingredient_sections, coverage);
++    renderSteps(expandedModal.querySelector('.steps'), recipe);
++    renderHeader(recipe);
++    expandedModal.querySelector('.expanded-recipe-image').innerHTML = getRecipeImage(recipe);
++
++    expandedModal.classList.remove('is-loading');
++    expandedModal.scrollTop = 0;
++    expandedModal.querySelector('.close-button')?.focus({ preventScroll: true });
++
++    // Count the view, and show it right away when it counted (once per person)
++    api('/api/recipes/register_view.php', { method: 'POST', json: { recipe_id: recipe.id } })
++        .then(result => {
++            if (result.counted && current?.id === recipe.id) {
++                bumpCount(expandedModal.querySelector('.views'), 1, { format: n => plural(n, 'view') });
++            }
++        })
++        .catch(() => { /* a missed view count isn't worth bothering anyone about */ });
+ }
+ 
+ export function closeRecipe() {
++    if (!expandedModal) return;
++    openToken++;
+     expanded = false;
+-    expandedModal.classList.add("hidden");
+-    overlay.classList.add('hidden');
+-    document.title = 'Recipes - food decider';
++    current = null;
++    expandedModal.classList.add('hidden');
++    if (document.getElementById('login-modal')?.classList.contains('hidden') !== false) overlay.classList.add('hidden');
++    document.title = 'FoodDecider';
+ }
+ 
+-async function handleDelete(recipeId) {
+-    if (!await confirmDialog({ title: 'Delete recipe', message: `Delete the recipe and everything on it? This can't be undone.` })) return;
++// ── Actions ──────────────────────────────────────────────────────────────────
+ 
+-    const response = await fetch(`/api/recipes/delete_recipe.php?recipe_id=${recipeId}`);
+-    const result   = await response.json();
++async function shareRecipe(recipe) {
++    const url = `${location.origin}/recipe/${recipe.id}`;
++    if (await copyText(url)) toast.success('Link copied. Paste it anywhere to share the recipe.');
++    else toast.error('Could not copy. The link is ' + url);
++}
+ 
+-    if (result.success) {
+-        document.querySelector(`.recipe-card[data-id="${recipeId}"]`)?.remove();
+-        history.back();
+-        closeRecipe();
+-    } else {
+-        toast.error('Failed to delete recipe');
++async function handleDelete(recipeId) {
++    if (!await confirmDialog({ title: 'Delete recipe', message: 'Delete the recipe and everything on it? This can’t be undone.', confirmText: 'Delete', danger: true })) return;
++
++    try {
++        await api('/api/recipes/delete_recipe.php', { query: { recipe_id: recipeId } });
++    } catch (error) {
++        toast.error(error.message || 'Could not delete the recipe');
++        return;
+     }
++    toast.success('Recipe deleted');
++    document.dispatchEvent(new CustomEvent('recipe:deleted', { detail: { id: recipeId } }));
++    history.back();
+ }
+ 
+-export async function handleSave(recipeId, element) {
+-    element?.classList.toggle('filled');
+-    const response = await fetch('/api/recipes/save_recipe.php', {
+-        method: 'POST',
+-        headers: { 'Content-Type': 'application/json' },
+-        body: JSON.stringify({ recipe_id: recipeId })
+-    });
+-    const data = await response.json();
+-    toast.success(data.status === 'saved' ? 'Recipe saved!' : 'Recipe removed from favorites.');
+-}
+\ No newline at end of file
++/**
++ * Save / unsave, from a card's bookmark or the recipe view. Everything on screen changes at once;
++ * if the server says no, it all goes back and the reason is shown.
++ */
++export async function handleSave(recipeId) {
++    if (!await requireLogin('save recipes to your kitchen')) return;
++
++    const cards = [...document.querySelectorAll(`.recipe-card[data-id="${recipeId}"] .saves`)];
++    const viewButton = () => current?.id === recipeId ? expandedModal.querySelector('.rv-save') : null;
++    const counter = current?.id === recipeId ? expandedModal.querySelector('.rv-saves') : null;
++    const wasSaved = viewButton() ? viewButton().getAttribute('aria-pressed') === 'true'
++                                  : cards[0]?.classList.contains('filled') ?? false;
++
++    const show = (saved) => {
++        cards.forEach(c => {
++            c.classList.toggle('filled', saved);
++            c.setAttribute('aria-pressed', String(saved));
++        });
++        viewButton()?.replaceWith(Object.assign(document.createElement('template'), { innerHTML: saveButtonHtml(saved) }).content);
++    };
++
++    show(!wasSaved);
++    bumpCount(counter, wasSaved ? -1 : 1, { format: n => plural(n, 'save') });
++
++    try {
++        const result = await api('/api/recipes/save_recipe.php', { method: 'POST', json: { recipe_id: recipeId } });
++        show(result.saved);                                     // the server's answer wins
++        if (counter && result.saves != null) counter.textContent = plural(result.saves, 'save');
++        toast.success(result.saved ? 'Saved to your kitchen' : 'Removed from your kitchen');
++    } catch (error) {
++        show(wasSaved);
++        bumpCount(counter, wasSaved ? 1 : -1, { format: n => plural(n, 'save') });
++        toast.error(error.message || 'Could not save the recipe');
++    }
++}
+diff --git a/src/assets/recipes.js b/src/assets/recipes.js
+index 485286d..91eaa20 100644
+--- a/src/assets/recipes.js
++++ b/src/assets/recipes.js
+@@ -1,5 +1,6 @@
+ import { renderRecipeList, getPickHtml, getEmptyPickHtml } from './recipe-cards.js';
+-import { expandRecipe, pushRecipeState } from './recipe-modal.js';
++import { openRecipe } from './recipe-modal.js';
++import { toast } from './toast.js';
+ import { toggleHidden } from './recipe-data.js';
+ import { clearTags, renderTagSelection } from './tags.js';
+ 
+@@ -16,7 +17,6 @@ let courseContainer = null;
+ // ── Boot ──────────────────────────────────────────────────────────────────────
+ 
+ export function init() {
+-    console.log("init called for recipes.js")
+     path = window.location.pathname;
+ 
+     const activeButton = document.querySelector('.recipe-category-buttons .nav-buttons.active');
+@@ -41,6 +41,23 @@ export function init() {
+ 
+ document.addEventListener('tagsLoaded', loadRecipes);
+ 
++// Added, edited or forked a recipe: refresh the grid so it shows up
++document.addEventListener('recipe:saved', () => loadRecipes({ quiet: true }));
++
++// Deleted: take the card away and count down at once, no reload needed
++document.addEventListener('recipe:deleted', (e) => {
++    const id = e.detail.id;
++    document.querySelectorAll(`.recipe-card[data-id="${id}"]`).forEach(card => card.remove());
++    const list = document.getElementById('recipe-list');
++    if (!list) return;
++    const count = Math.max(0, Number(list.dataset.count || 0) - 1);
++    list.dataset.count = count;
++    document.dispatchEvent(new CustomEvent('recipesLoaded', { detail: { count } }));
++    if (!list.querySelector('.recipe-card')) renderRecipeList(list, []);
++    const pick = document.getElementById('pick');
++    if (pick?.querySelector(`.pick-cook[data-id="${id}"]`)) pick.hidden = true;
++});
++
+ // Logged-out visitors only get Discover, and only there is "Saved" pointless
+ function subCategoryHtml(categoryId) {
+     return categoryId === "personal-recipes"
+@@ -124,8 +141,7 @@ function initEventListeners() {
+         const cook = e.target.closest('.pick-cook');
+         if (cook) {
+             const id = parseInt(cook.dataset.id);
+-            pushRecipeState(id);
+-            expandRecipe(id);
++            openRecipe(id);
+         } else if (e.target.closest('.pick-another')) {
+             randomRecipe();
+         } else if (e.target.closest('.empty-clear')) {
+@@ -291,7 +307,6 @@ function renderCourseSelection() {
+         el.classList.toggle('selected', on);
+         el.setAttribute('aria-pressed', String(on));
+     });
+-    console.log("Selected courses:", [...selectedCourses]);
+ }
+ 
+ // ── Data loading ──────────────────────────────────────────────────────────────
+@@ -325,21 +340,36 @@ function buildFormData() {
+     return formData;
+ }
+ 
+-async function loadRecipes() {
++async function loadRecipes({ quiet = false } = {}) {
+ 
+     const token = ++loadToken;
+ 
+     const recipeList = document.getElementById('recipe-list');
+-    recipeList.innerHTML = '<p>Loading recipes...</p>';
+-
+-    const response = await fetch('/api/recipes/fetch_recipes.php', {
+-        method: 'POST',
+-        body: buildFormData()
+-    });
+-
+-    const recipes = await response.json();
++    // Keep the old cards on screen (dimmed) while the new ones load: no jumping layout
++    recipeList.classList.add('is-loading');
++    if (!quiet && !recipeList.querySelector('.recipe-card')) recipeList.innerHTML = '<p class="rv-muted">Loading recipes…</p>';
++
++    let recipes;
++    try {
++        const response = await fetch('/api/recipes/fetch_recipes.php', {
++            method: 'POST',
++            body: buildFormData()
++        });
++        if (!response.ok) throw new Error(`HTTP ${response.status}`);
++        recipes = await response.json();
++        if (!Array.isArray(recipes)) throw new Error('Unexpected answer');
++    } catch (error) {
++        if (token !== loadToken) return;
++        recipeList.classList.remove('is-loading');
++        recipeList.innerHTML = `<div class="empty"><h3>Recipes didn’t load</h3>
++            <p>Check your connection and try again.</p>
++            <button type="button" class="btn retry-load">Try again</button></div>`;
++        recipeList.querySelector('.retry-load').addEventListener('click', () => loadRecipes());
++        return;
++    }
+ 
+     if (token !== loadToken) return; // Ignore if a newer request has been made
++    recipeList.classList.remove('is-loading');
+     renderRecipeList(recipeList, recipes);
+     recipeList.dataset.count = recipes.length;   // for anything that loads after this first render
+     document.dispatchEvent(new CustomEvent('recipesLoaded', { detail: { count: recipes.length } }));
+@@ -354,12 +384,16 @@ async function randomRecipe() {
+     formData.append('action', 'random');
+     if (lastPickId) formData.append('exclude_id', lastPickId);   // "Another one" never repeats the last pick
+ 
+-    const response = await fetch('/api/recipes/fetch_recipes.php', {
+-        method: 'POST',
+-        body: formData
+-    });
+-    const result = await response.json();
+-    const recipe = result[0];
++    let result;
++    try {
++        const response = await fetch('/api/recipes/fetch_recipes.php', { method: 'POST', body: formData });
++        if (!response.ok) throw new Error(`HTTP ${response.status}`);
++        result = await response.json();
++    } catch {
++        toast.error('Could not pick a recipe right now. Try again.');
++        return;
++    }
++    const recipe = Array.isArray(result) ? result[0] : null;
+ 
+     // Only one recipe fits and it was the last pick: show it again rather than "nothing found"
+     if (!recipe && lastPickId) {
+@@ -369,7 +403,8 @@ async function randomRecipe() {
+ 
+     // No pick card on this page (e.g. a profile): keep the old behaviour
+     if (!pick) {
+-        if (recipe) { pushRecipeState(recipe.id); expandRecipe(recipe.id); }
++        if (recipe) openRecipe(recipe.id);
++        else toast.info('No recipe fits those filters.');
+         return;
+     }
+ 
+diff --git a/src/assets/redesign.css b/src/assets/redesign.css
+index 82c4b4e..ccec24c 100644
+--- a/src/assets/redesign.css
++++ b/src/assets/redesign.css
+@@ -652,3 +652,212 @@ h1, h2, h3,
+     .pick { animation: none; }
+     .plate { transition: none; }
+ }
++
++/* =====================================================================
++   Interactions & polish (round 3): recipe view, login, shopping list,
++   groups, profile, shared bits. Kept together so it's easy to find.
++   ===================================================================== */
++
++/* ---------- Shared ---------- */
++
++.rv-muted { margin: 0; color: var(--mute); font-size: .92rem; }
++
++.btn { display: inline-flex; align-items: center; justify-content: center; gap: .35rem; text-decoration: none; }
++.btn .material-symbols-outlined { font-size: 1.15rem; }
++.btn:disabled { opacity: .6; cursor: default; }
++.btn.danger-quiet { color: var(--berry-d); }
++.btn.danger-quiet:hover { background: var(--berry-t); border-color: var(--berry-t); }
++
++.icon-btn {
++    display: inline-grid; place-items: center;
++    width: 2.2rem; height: 2.2rem; margin: 0; padding: 0;
++    border: 0; border-radius: 50%; background: none; color: var(--mute);
++}
++.icon-btn:hover { background: var(--well); color: var(--ink); border-color: transparent; }
++
++.close-button {
++    margin: 0; padding: 0; border: 0;
++    font: 400 1.5rem/1 var(--sans);
++    background: var(--well); color: var(--mute);
++}
++
++/* A number that just changed (followers, saves, views) gives a small pop */
++.bump { animation: bump .35s ease-out; display: inline-block; }
++@keyframes bump { 40% { transform: scale(1.25); color: var(--berry); } }
++
++/* Press and hold: a gentle hint that something is about to happen */
++.is-pressing { transition: transform .5s ease-in, background-color .5s; transform: scale(.98); background-color: var(--well); }
++
++.recipe-card:focus-visible { outline: 3px solid var(--berry); outline-offset: 3px; }
++.recipe-card .saves { margin: 0; padding: .35rem .5rem; border: 0; cursor: pointer; }
++.recipe-card .saves[aria-pressed="true"] .material-symbols-outlined,
++.recipe-card .saves.filled .material-symbols-outlined { font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
++.recipe-card-container.is-loading { opacity: .55; transition: opacity .2s; pointer-events: none; }
++
++/* ---------- Recipe view ---------- */
++
++#expanded-modal { overflow-x: hidden; }
++#expanded-modal.is-loading .rv { opacity: .35; pointer-events: none; }
++.rvh > *, .rvb > * { min-width: 0; }                  /* long words can't push the view wider than the phone */
++
++.expanded-recipe-image { aspect-ratio: 4 / 3; border-radius: 18px; overflow: hidden; background: var(--well); }
++.expanded-recipe-image img { width: 100%; height: 100%; border: 0; border-radius: 0; object-fit: cover; box-shadow: none; }
++.expanded-recipe-image .placeholder { height: 100%; }
++.expanded-recipe-image .placeholder span { font-size: 4rem; }
++
++.rv-info { display: flex; flex-direction: column; gap: .7rem; }
++.rv-info .recipe-title { margin: 0; font-size: clamp(1.8rem, 4vw, 2.6rem); }
++.recipe-owner { padding-right: 2.5rem; }
++.recipe-userinfo { display: inline-flex; align-items: center; gap: .5rem; color: var(--mute); font-size: .92rem; text-decoration: none; }
++.recipe-userinfo strong { color: var(--ink); font-weight: 600; }
++.recipe-userinfo:hover strong { color: var(--berry-d); }
++.owner-profile-pic { width: 2rem; height: 2rem; }
++.recipe-description { margin: 0; font-size: 1.05rem; }
++.recipe-description:empty { display: none; }
++
++.recipe-forked-from { display: flex; align-items: center; flex-wrap: wrap; gap: .3rem; margin: 0; font-size: .92rem; color: var(--mute); }
++.recipe-forked-from .material-symbols-outlined { font-size: 1.1rem; color: var(--dill); }
++.forked-from-link { color: var(--dill); font-weight: 600; text-decoration: underline; text-underline-offset: .2em; }
++
++.rv-stats { display: flex; flex-wrap: wrap; gap: .35rem; }
++.rv-stats > span { padding: .2rem .7rem; border-radius: 99px; background: var(--bg); font-size: .82rem; color: var(--mute); }
++.rv-stats > span:empty, .rv-stats > span[hidden] { display: none; }
++.rv-stats .course { background: var(--dill-t); color: var(--dill); font-weight: 600; }
++.rv-stats .course-type { margin: 0; color: inherit; font-weight: inherit; }
++
++.recipe-meta { width: auto; }
++.recipe-time { display: flex; gap: .5rem; padding: 0; flex-wrap: wrap; }
++.recipe-time-section { padding: .5rem .9rem; border-radius: 14px; background: var(--bg); gap: 0; }
++.recipe-time-section h5 { font-size: .75rem; font-weight: 600; color: var(--mute); }
++.recipe-time-section span { font-size: 1.05rem; }
++
++.recipe-actions { display: flex; flex-wrap: wrap; gap: .45rem; margin: 0; }
++.recipe-actions .btn { padding: .55rem 1rem; }
++.rv-save[aria-pressed="true"] { background: var(--card); color: var(--berry-d); border-color: var(--berry); }
++.rv-save[aria-pressed="true"] .material-symbols-outlined { font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
++
++.recipe-tags { flex-direction: row; margin: 0; }
++.recipe-tags:empty { display: none; }
++.recipe-tags .pill { background: var(--well); color: var(--mute); }
++
++.rv-hint { margin: -.2rem 0 .6rem; font-size: .82rem; color: var(--mute); }
++
++/* Ingredients: the whole row ticks off; the + adds to the shopping list */
++#expanded-modal .ingredient-item {
++    display: flex; align-items: center; gap: .55rem;
++    margin: 0; padding: .45rem .4rem; border-radius: 10px; cursor: pointer;
++}
++#expanded-modal .ingredient-item:hover { background: var(--card); }
++#expanded-modal .ingredient-item p { flex: 1; font-size: .95rem; }
++#expanded-modal .ingredient-item[aria-pressed="true"] p { text-decoration: line-through; color: var(--mute); }
++#expanded-modal .ingredient-add-button { margin: 0; padding: .2rem; border: 0; background: none; opacity: .55; }
++#expanded-modal .ingredient-item:hover .ingredient-add-button,
++#expanded-modal .ingredient-add-button:focus-visible { opacity: 1; }
++.section-heading { margin: .9rem 0 .3rem; font: 600 .82rem var(--sans); color: var(--dill); text-transform: none; }
++
++#expanded-modal .macros { margin-top: 1.2rem; padding-top: 1rem; border-top: 1px solid var(--line); }
++#expanded-modal .macros h3 small { font: 400 .8rem var(--sans); color: var(--mute); }
++#expanded-modal .macro-list { margin-top: .4rem; padding: .6rem; background: var(--card); }
++#expanded-modal .macro-ring { width: 110px; height: 110px; }
++#expanded-modal .macro-ring-container { gap: 1rem; }
++
++.rv-steps .steps { margin-top: .4rem; gap: .5rem; }
++.rv-step { align-items: flex-start; gap: 1rem; padding: .8rem 1rem; border-radius: 14px; background: var(--bg); }
++.rv-step .instruction-text { line-height: 1.55; }
++
++/* ---------- Login / sign up ---------- */
++
++#login-modal { width: min(94vw, 27rem); }
++.auth { display: grid; gap: 1rem; padding-top: 2.2rem; }
++.auth h2 { margin: 0; font-size: 1.7rem; }
++.auth-lead { margin: -.4rem 0 0; color: var(--mute); }
++.auth-tabs { display: flex !important; width: 100%; }
++.auth-tabs button { flex: 1; margin: 0; padding: .5rem; border: 0; border-radius: 99px; background: none; color: var(--mute); font-weight: 600; }
++.auth-tabs button.selected { background: var(--card); color: var(--berry-d); box-shadow: 0 1px 3px rgba(0, 0, 0, .18); }
++.auth .fm { gap: .9rem; padding: 0; }
++.auth .fm .btn.p { width: 100%; margin-top: .2rem; padding: .75rem; }
++.auth input[type="file"] { width: 100%; padding: .5rem; font-size: .9rem; }
++.field-hint { display: block; margin-top: .3rem; color: var(--mute); font-size: .8rem; }
++.form-error { margin: 0; padding: .55rem .8rem; border-radius: 10px; background: var(--berry-t); color: var(--berry-d); font-size: .9rem; font-weight: 500; }
++.auth-or { display: flex; align-items: center; gap: .8rem; color: var(--mute); font-size: .85rem; }
++.auth-or::before, .auth-or::after { content: ""; flex: 1; height: 1px; background: var(--line); }
++.auth-google { width: 100%; padding: .7rem; }
++
++/* ---------- Shopping list ---------- */
++
++#shopping-list-modal { width: min(94vw, 30rem); }
++#shopping-list-modal > .dlg { padding: 1.4rem 1.5rem 1.5rem; }
++.sl-head { display: flex; align-items: center; gap: .3rem; padding-right: 2.6rem; }
++.sl-title { margin: 0; font-size: 1.6rem; border-radius: 8px; cursor: default; user-select: none; -webkit-user-select: none; }
++.sl-title:focus-visible { outline-offset: 4px; }
++.sl-title-input { width: 100%; margin: 0; padding: .2rem .4rem; font: 700 1.5rem var(--serif); border: 1px solid var(--berry); background: var(--card); }
++.sl-toolbar { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin: .8rem 0 .4rem; }
++.sl-toolbar select { flex: 1 1 10rem; width: auto; margin: 0; padding-top: .55rem; padding-bottom: .55rem; background-color: var(--bg); }
++.sl-toolbar .btn { margin: 0; padding: .5rem .9rem; }
++.share-panel { display: grid; gap: .4rem; margin: .4rem 0; padding: .8rem 1rem; border-radius: 12px; background: var(--bg); }
++.share-panel label { display: flex; align-items: center; gap: .5rem; color: var(--ink); font-size: .95rem; }
++.sl-hint { margin: .2rem 0 .3rem; font-size: .8rem; color: var(--mute); }
++#shopping-list-modal form { padding: 0; }
++.shopping-item.is-editing { border-bottom-color: var(--berry); }
++.shopping-item.is-editing .shopping-text { color: var(--berry-d); }
++.shopping-item.save-failed { border-bottom-color: var(--berry); }
++.shopping-item.save-failed .shopping-text { color: var(--berry-d); }
++.shopping-item .shopping-text { -webkit-touch-callout: none; }
++
++/* ---------- Groups ---------- */
++
++#social-modal > .dlg, #create-group-modal > div, #follower-modal > .dlg { padding: 1.5rem; }
++#social-modal > .dlg > p { margin: -.4rem 0 .4rem; }
++.group-section h3 { margin: 1rem 0 .4rem; font: 600 .85rem var(--sans); color: var(--mute); }
++.group, .invitation {
++    display: flex; align-items: center; gap: .5rem;
++    padding: .6rem .8rem; margin-bottom: .4rem; border-radius: 12px; background: var(--bg);
++    transition: opacity .2s, transform .2s;
++}
++.group-text { flex: 1; min-width: 0; }
++.group-name { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
++.group-text small { color: var(--mute); }
++.group .btn, .invitation .btn { margin: 0; padding: .4rem .9rem; font-size: .88rem; }
++.invitation.is-leaving { opacity: .4; transform: translateX(6px); }
++#social-modal .create-group { margin: 1rem 0 0; }
++
++/* ---------- Profile page ---------- */
++
++.user-page { max-width: 70rem; margin: 0 auto; padding: clamp(1.5rem, 5vw, 3rem) clamp(1rem, 4vw, 2rem) 4rem; }
++.user-profile { display: flex; flex-direction: row; align-items: center; gap: clamp(1rem, 4vw, 2.5rem); margin: 0 0 2rem; width: auto; }
++.user-profile-img { width: clamp(6rem, 18vw, 9rem); height: clamp(6rem, 18vw, 9rem); flex: none; }
++.user-profile-text { display: flex; flex-direction: column; align-items: flex-start; gap: .6rem; min-width: 0; }
++.user-profile-name { margin: 0; font-size: clamp(2rem, 5vw, 3rem); font-weight: 800; overflow-wrap: anywhere; }
++.user-profile-bio { margin: 0; color: var(--mute); max-width: 40rem; }
++.follower-count-container { display: flex; gap: .4rem; flex-wrap: wrap; }
++.stat { margin: 0; padding: .35rem .8rem; border: 1px solid var(--line); border-radius: 99px; background: var(--card); color: var(--mute); font-size: .92rem; }
++.stat strong { color: var(--ink); }
++.stat:hover { border-color: var(--dill); background: var(--card); }
++.follow-button { margin: .2rem 0 0; min-width: 8rem; }
++.user-recipes-title { margin: 0 0 1rem; font-size: 1.6rem; }
++.follower-list { display: grid; gap: .3rem; margin-top: .8rem; max-height: 60vh; overflow: auto; }
++.follower-item { display: flex; align-items: center; gap: .7rem; padding: .5rem; border-radius: 12px; color: var(--ink); text-decoration: none; }
++.follower-item:hover { background: var(--bg); color: var(--ink); }
++#follower-modal { width: min(94vw, 24rem); }
++
++/* ---------- Phones ---------- */
++
++@media (max-width: 760px) {
++    #expanded-modal .rv { padding: 2.8rem 1rem 1.5rem; }
++    .recipe-actions .btn { flex: 1 1 auto; }
++    .user-profile { flex-direction: column; text-align: center; }
++    .user-profile-text { align-items: center; }
++    .sl-toolbar select { flex-basis: 100%; }
++    .rv-hint { display: none; }
++}
++
++@media (prefers-reduced-motion: reduce) {
++    .bump, .is-pressing, .invitation { animation: none; transition: none; }
++}
++
++/* fixes after the first look */
++.rv-stats > span { display: inline-flex; align-items: center; margin: 0; line-height: 1.4; }
++#expanded-modal .section-heading { margin: .9rem 0 .3rem; font: 600 .82rem var(--sans); color: var(--dill); }
++#expanded-modal .ingredient-item p { margin: 0; }
++.auth-google, .auth .btn { box-sizing: border-box; }
++.sl-toolbar select { flex-basis: 8rem; }
+diff --git a/src/assets/sections.js b/src/assets/sections.js
+index 697b84c..def0125 100644
+--- a/src/assets/sections.js
++++ b/src/assets/sections.js
+@@ -3,14 +3,45 @@ import { groupBySection } from './recipe-data.js';
+ let stepSectionCount = 0;
+ let ingredientSectionCount = 0;
+ 
++// Keyboard in the ingredient and step lists:
++//   Enter              new row below (and never submits the whole form)
++//   Backspace (empty)  remove the row
++//   Arrow up / down    move to the row above / below, across sections and their titles
+ export function init() {
+     let form = document.querySelector('#add-recipe-form');
++    if (!form || form.dataset.sectionsBound) return;
++    form.dataset.sectionsBound = '1';
++
+     form.addEventListener('keydown', (e) => {
+         const target = e.target;
++        const container = target.closest('#ingredients, #instructions');
++        if (!container) return;
++
++        // The ingredient suggestions use the arrows and Enter while they're showing
++        if (suggestionsOpen(target) && ['ArrowUp', 'ArrowDown', 'Enter'].includes(e.key)) return;
++
++        if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
++            const fields = [...container.querySelectorAll('.section-title-input, .ingredient-text, .instruction-text')];
++            const next = fields[fields.indexOf(target) + (e.key === 'ArrowUp' ? -1 : 1)];
++            if (next) {
++                e.preventDefault();
++                next.focus();
++                next.setSelectionRange?.(next.value.length, next.value.length);   // caret at the end
++            }
++            return;
++        }
++
+         const type = target.classList.contains('instruction-text') ? 'steps'
+                    : target.classList.contains('ingredient-text')   ? 'ingredients'
+                    : null;
+-        if (!type) return;
++        if (!type) {
++            // Enter in a section title jumps to its first row instead of submitting the form
++            if (e.key === 'Enter' && target.classList.contains('section-title-input')) {
++                e.preventDefault();
++                target.closest('.section-group')?.querySelector('.ingredient-text, .instruction-text')?.focus();
++            }
++            return;
++        }
+  
+         if (e.key === 'Enter') {
+             e.preventDefault();
+@@ -22,6 +53,12 @@ export function init() {
+     });
+ }
+ 
++function suggestionsOpen(input) {
++    const list = input.parentElement?.querySelector('.autocomplete-list')
++              ?? input.parentElement?.parentElement?.querySelector('.autocomplete-list');
++    return Boolean(list?.querySelector('.autocomplete-item'));
++}
++
+ const SECTION_TYPES = {
+     steps: {
+         containerId: 'instructions',
+diff --git a/src/assets/social-interactions.js b/src/assets/social-interactions.js
+index 3aa961e..51bc55d 100644
+--- a/src/assets/social-interactions.js
++++ b/src/assets/social-interactions.js
+@@ -1,5 +1,7 @@
+ import { toast } from './toast.js';
+ import { escapeHtml } from './recipe-cards.js';
++import { confirmDialog } from './dialog.js';
++import { api, plural } from './ui.js';
+ 
+ let inviteModal = null;
+ let badgeCount;
+@@ -28,10 +30,8 @@ export function init(modal) {
+         let createGroupForm = document.querySelector('#create-group-form');
+         if (createGroupForm) {
+             document.querySelector('#add-member-btn')?.addEventListener('click', () => addMemberRow());
+-            createGroupForm.addEventListener('submit', (e) => {
+-                submitGroupForm(e);
+-                resetMemberForm();
+-            });
++            // The form is only cleared after the group was created, so a failure keeps what was typed
++            createGroupForm.addEventListener('submit', submitGroupForm);
+         }
+     }
+     updateBadgeCount();
+@@ -130,34 +130,28 @@ function createGroup() {
+     if (!modal.classList.contains('hidden')) loadSuggestions();
+ }
+ 
+-function submitGroupForm(e) {
+-    console.log('Submitting group form...');
++async function submitGroupForm(e) {
+     e.preventDefault();
+     const form = e.target;
+-    const formData = new FormData(form);
+-
+-    fetch('/api/groups/groups.php', {
+-        method: 'POST',
+-        body: formData
+-    })
+-    .then(response => response.json())
+-    .then(data => {
+-        if (data.success) {
+-            toast.success('Group created successfully!');
+-            if (data.skipped?.length > 0) {
+-                toast.info(`Could not invite: ${data.skipped.join(', ')}`);
+-            }
+-            document.querySelector('#create-group-modal').classList.add('hidden');
+-            form.reset();
+-            resetMemberForm();
+-            loadGroups();
+-        } else {
+-            toast.error('Error creating group: ' + data.message);
++    const button = form.querySelector('button[type="submit"]');
++    if (button.disabled) return;
++    button.disabled = true;
++
++    try {
++        const data = await api('/api/groups/groups.php', { method: 'POST', form: new FormData(form) });
++        toast.success(`Created ${form.querySelector('#group_name')?.value.trim() || 'the group'}`);
++        if (data.skipped?.length > 0) {
++            toast.info(`Couldn’t invite: ${data.skipped.join(', ')}. Check the usernames.`, { duration: 8000 });
+         }
+-    })
+-    .catch(e => {
+-        toast.error('An unexpected error occurred');
+-    });
++        document.querySelector('#create-group-modal').classList.add('hidden');
++        form.reset();
++        resetMemberForm();
++        loadGroups();
++    } catch (error) {
++        toast.error(error.message || 'Could not create the group');
++    } finally {
++        button.disabled = false;
++    }
+ }
+ 
+ async function updateBadgeCount() {
+@@ -177,23 +171,27 @@ async function updateBadgeCount() {
+ }
+ 
+ async function loadInvitations() {
++    const section = document.getElementById('invitations-section');
+     inviteModal.classList.remove('hidden');
+-    inviteModal.innerHTML = '<p>Loading invitations...</p>';
++    inviteModal.innerHTML = '<p class="rv-muted">Loading invitations…</p>';
+ 
+     try {
+         const res = await fetch('/api/groups/invitations.php');
+         const invitations = await res.json();
+ 
+         if (!invitations.success || invitations.count === 0) {
+-            inviteModal.innerHTML = '<p>No invitations at this time.</p>';
++            inviteModal.innerHTML = '';
++            if (section) section.hidden = true;   // nothing to show: no empty "Invitations" heading
+             updateBadgeUI(0);
+             return;
+         }
+ 
++        if (section) section.hidden = false;
+         updateBadgeUI(invitations.count);
+         renderInvitations(invitations.invitations);
+     } catch (error) {
+-        inviteModal.innerHTML = '<p>Could not load invitations. Please try again later.</p>';
++        if (section) section.hidden = false;
++        inviteModal.innerHTML = '<p class="rv-muted">Could not load invitations. Try again later.</p>';
+         console.error(error);
+     }
+ }
+@@ -204,13 +202,13 @@ async function loadGroups() {
+         const groups = await res.json();
+ 
+         if (!groups.success || groups.count === 0) {
+-            document.querySelector('#group-list').innerHTML = '<p>No groups found.</p>';
++            document.querySelector('#group-list').innerHTML = '<p class="rv-muted">You’re not in any groups yet.</p>';
+             return;
+         }
+ 
+         renderGroups(groups.groups);
+     } catch (error) {
+-        document.querySelector('#group-list').innerHTML = '<p>Could not load groups. Please try again later.</p>';
++        document.querySelector('#group-list').innerHTML = '<p class="rv-muted">Could not load groups. Try again later.</p>';
+         console.error(error);
+     }
+ }
+@@ -222,36 +220,39 @@ function renderGroups(groups) {
+         const groupElement = document.createElement('div');
+         groupElement.classList.add('group');
+         groupElement.innerHTML = `
+-            <p>${escapeHtml(group.group_name)}</p>
+-            <button class="leave-group" data-id="${escapeHtml(group.id)}">Leave</button>
++            <div class="group-text">
++                <p class="group-name">${escapeHtml(group.group_name)}</p>
++                ${group.member_count != null ? `<small>${plural(Number(group.member_count), 'member')}</small>` : ''}
++            </div>
++            <button type="button" class="btn leave-group" data-id="${escapeHtml(group.id)}" data-name="${escapeHtml(group.group_name)}">Leave</button>
+         `;
+         groupList.appendChild(groupElement);
+     });
+ 
+     groupList.querySelectorAll('.leave-group').forEach(button => {
+-        button.addEventListener('click', () => handleLeaveGroup(button.dataset.id));
++        button.addEventListener('click', () => handleLeaveGroup(button.dataset.id, button));
+     });
+ }
+ 
+-async function handleLeaveGroup(groupId) {
+-    try {
+-        const res = await fetch('/api/groups/groups.php', {
+-            method: 'POST',
+-            headers: {
+-                'Content-Type': 'application/x-www-form-urlencoded'
+-            },
+-            body: new URLSearchParams({ action: 'leave', group_id: groupId })
+-        });
+-        const data = await res.json();
++async function handleLeaveGroup(groupId, button) {
++    const name = button?.dataset.name || 'this group';
++    if (!await confirmDialog({ title: 'Leave group', message: `Leave ${name}? Lists shared with it will no longer show up for you.`, confirmText: 'Leave', danger: true })) return;
+ 
+-        if (data.success) {
+-            toast.success('Left group successfully!');
+-            loadGroups(); // Refresh the groups list
+-        } else {
+-            toast.error(`Error: ${data.message}`);
+-        }
++    const row = button?.closest('.group');
++    const list = row?.parentElement;
++    const next = row?.nextSibling;
++    row?.remove();                                   // gone right away…
++    if (list && !list.querySelector('.group')) list.innerHTML = '<p class="rv-muted">You’re not in any groups yet.</p>';
++
++    try {
++        await api('/api/groups/groups.php', { method: 'POST', form: new URLSearchParams({ action: 'leave', group_id: groupId }) });
++        toast.success(`You left ${name}`);
+     } catch (error) {
+-        console.error('Error leaving group:', error);
++        if (list && row) {                           // …and back if it didn't work
++            list.querySelector('.rv-muted')?.remove();
++            list.insertBefore(row, next?.isConnected ? next : null);
++        }
++        toast.error(error.message || 'Could not leave the group');
+     }
+ }
+ 
+@@ -261,9 +262,12 @@ function renderInvitations(invitations) {
+         const invitationElement = document.createElement('div');
+         invitationElement.classList.add('invitation');
+         invitationElement.innerHTML = `
+-            <p>${escapeHtml(invitation.group_name)} - Invited by ${escapeHtml(invitation.inviter_name)}</p>
+-            <button class="accept-invite" data-id="${escapeHtml(invitation.invitation_id)}">Accept</button>
+-            <button class="decline-invite" data-id="${escapeHtml(invitation.invitation_id)}">Decline</button>
++            <div class="group-text">
++                <p class="group-name">${escapeHtml(invitation.group_name)}</p>
++                <small>Invited by ${escapeHtml(invitation.inviter_name)}</small>
++            </div>
++            <button type="button" class="btn p accept-invite" data-id="${escapeHtml(invitation.invitation_id)}">Join</button>
++            <button type="button" class="btn decline-invite" data-id="${escapeHtml(invitation.invitation_id)}">Decline</button>
+         `;
+         inviteModal.appendChild(invitationElement);
+     });
+@@ -278,30 +282,30 @@ function renderInvitations(invitations) {
+ }
+ 
+ async function handleInviteAction(invitationId, action) {
+-    try {
+-        const res = await fetch('/api/groups/invitations.php', {
+-            method: 'POST',
+-            headers: {
+-                'Content-Type': 'application/json'
+-            },
+-            body: JSON.stringify({ invitation_id: invitationId, action: action })
+-        });
+-        const data = await res.json();
++    // The invitation disappears and the badge counts down at once; it comes back if the server says no
++    const row = inviteModal.querySelector(`[data-id="${CSS.escape(String(invitationId))}"]`)?.closest('.invitation');
++    const name = row?.querySelector('.group-name')?.textContent ?? 'the group';
++    const before = Number(badgeCount?.textContent) || inviteModal.querySelectorAll('.invitation').length;
++    row?.classList.add('is-leaving');
++    row?.querySelectorAll('button').forEach(b => { b.disabled = true; });
++    updateBadgeUI(Math.max(0, before - 1));
+ 
+-        if (data.status === 'success') {
+-            toast.success(`Invitation ${action}ed successfully!`);
+-            updateBadgeUI(data.remaining_count);
+-            loadInvitations();
+-            loadGroups();
+-        } else {
+-            toast.error(`Error: ${data.message}`);
+-        }
++    try {
++        const data = await api('/api/groups/invitations.php', { method: 'POST', json: { invitation_id: invitationId, action } });
++        toast.success(action === 'accept' ? `You joined ${name}` : `Declined the invitation to ${name}`);
++        updateBadgeUI(data.remaining_count ?? Math.max(0, before - 1));
++        loadInvitations();
++        if (action === 'accept') loadGroups();
+     } catch (error) {
+-        console.error('Error handling invitation:', error);
++        row?.classList.remove('is-leaving');
++        row?.querySelectorAll('button').forEach(b => { b.disabled = false; });
++        updateBadgeUI(before);
++        toast.error(error.message || 'Could not answer the invitation');
+     }
+ }
+ 
+ function updateBadgeUI(count) {
++    if (!badgeCount) return;
+     if (count > 0) {
+         badgeCount.textContent = count > 99 ? '99+' : count;
+         badgeCount.classList.remove('hidden');
+diff --git a/src/assets/suggestions.js b/src/assets/suggestions.js
+index 02d6f9b..6f2d2c0 100644
+--- a/src/assets/suggestions.js
++++ b/src/assets/suggestions.js
+@@ -52,6 +52,7 @@ export function init() {
+ 
+         const items = list.querySelectorAll(".autocomplete-item");
+         const active = list.querySelector(".autocomplete-item.active");
++        if (!items.length) return;   // nothing showing: the arrows move between rows (sections.js)
+ 
+         if (e.key === "ArrowDown") {
+             e.preventDefault();
+diff --git a/src/assets/ui.js b/src/assets/ui.js
+new file mode 100644
+index 0000000..cfa8f6a
+--- /dev/null
++++ b/src/assets/ui.js
+@@ -0,0 +1,164 @@
++// assets/ui.js
++// Small helpers the feature modules share:
++//   api()          fetch + JSON + one error format (so every caller can show a useful toast)
++//   isLoggedIn()   / requireLogin()  the "log in to do this" prompt
++//   copyText()     clipboard with a fallback
++//   onLongPress()  press-and-hold on touch screens (and mouse), e.g. to rename a list
++//   bumpCount()    change a number on screen right away, with a small pop
++
++import { confirmDialog } from './dialog.js';
++
++// ── Requests ──────────────────────────────────────────────────────────────────
++
++export class ApiError extends Error {
++    constructor(message, status, data = {}) {
++        super(message);
++        this.status = status;
++        this.data = data;
++    }
++}
++
++/**
++ * api('/api/x.php', { method: 'POST', json: {...} })   JSON body
++ * api('/api/x.php', { method: 'POST', form: formData }) form body
++ * api('/api/x.php', { query: { id: 4 } })                 GET with a query string
++ * Resolves the parsed JSON. Rejects with ApiError (message is safe to show in a toast).
++ */
++export async function api(url, { method = 'GET', json, form, query } = {}) {
++    const full = query ? `${url}?${new URLSearchParams(query)}` : url;
++    let response;
++    try {
++        response = await fetch(full, {
++            method,
++            headers: json ? { 'Content-Type': 'application/json' } : undefined,
++            body: json ? JSON.stringify(json) : form,
++        });
++    } catch {
++        throw new ApiError('Could not reach the server. Check your connection and try again.', 0);
++    }
++
++    const data = await response.json().catch(() => ({}));
++    if (response.status === 401) {
++        throw new ApiError('You need to log in to do that.', 401, data);
++    }
++    if (!response.ok || data?.success === false || data?.status === 'error') {
++        const message = data?.error || data?.message || data?.detail || 'Something went wrong. Try again.';
++        throw new ApiError(message, response.status, data);
++    }
++    return data;
++}
++
++// ── Logged in or not ──────────────────────────────────────────────────────────
++
++/** The header shows the avatar only for logged-in people (includes/modules.php getNavBar). */
++export function isLoggedIn() {
++    return Boolean(document.querySelector('.top .current-user'));
++}
++
++/**
++ * Call before anything that needs an account. Returns true when logged in; otherwise asks
++ * the person to log in or sign up (with what they were trying to do) and returns false.
++ *   if (!await requireLogin('save recipes')) return;
++ */
++export async function requireLogin(whatFor) {
++    if (isLoggedIn()) return true;
++    const go = await confirmDialog({
++        title: 'Log in to continue',
++        message: `You need an account to ${whatFor}. It's free and takes a minute.`,
++        confirmText: 'Log in or sign up',
++        cancelText: 'Not now',
++    });
++    if (go) openLogin();
++    return false;
++}
++
++export function openLogin(tab = 'login') {
++    const modal = document.getElementById('login-modal');
++    if (!modal) {                       // pages without the dialog: the home page opens it
++        location.href = '/?login=1';
++        return;
++    }
++    modal.classList.remove('hidden');
++    document.getElementById('modal-overlay')?.classList.remove('hidden');
++    modal.dispatchEvent(new CustomEvent('login:tab', { detail: tab }));
++    modal.querySelector(tab === 'signup' ? '#signup-form input' : '#login-form input')?.focus();
++}
++
++// ── Clipboard ─────────────────────────────────────────────────────────────────
++
++export async function copyText(text) {
++    try {
++        await navigator.clipboard.writeText(text);
++        return true;
++    } catch {
++        // Older browsers, or a page without clipboard permission
++        const area = document.createElement('textarea');
++        area.value = text;
++        area.setAttribute('readonly', '');
++        area.style.position = 'fixed';
++        area.style.opacity = '0';
++        document.body.append(area);
++        area.select();
++        const ok = document.execCommand('copy');
++        area.remove();
++        return ok;
++    }
++}
++
++// ── Press and hold ────────────────────────────────────────────────────────────
++
++/**
++ * onLongPress(container, '.selector', (element) => {...})
++ * Fires after holding ~0.5 s without moving. Works with touch, pen and mouse, and stops the
++ * phone's own long-press menu on those elements. Delegated, so rows added later work too.
++ */
++export function onLongPress(container, selector, callback, { ms = 500 } = {}) {
++    let timer = 0, startX = 0, startY = 0, target = null;
++
++    const cancel = () => {
++        clearTimeout(timer);
++        target?.classList.remove('is-pressing');
++        target = null;
++    };
++
++    container.addEventListener('pointerdown', (e) => {
++        if (e.button !== 0) return;
++        const el = e.target.closest(selector);
++        if (!el || !container.contains(el)) return;
++        target = el;
++        startX = e.clientX;
++        startY = e.clientY;
++        el.classList.add('is-pressing');
++        timer = setTimeout(() => {
++            el.classList.remove('is-pressing');
++            el.dataset.longPressed = '1';           // lets a click handler ignore the click that follows
++            setTimeout(() => delete el.dataset.longPressed, 400);
++            navigator.vibrate?.(15);
++            callback(el, e);
++            target = null;
++        }, ms);
++    });
++    container.addEventListener('pointermove', (e) => {
++        if (target && Math.hypot(e.clientX - startX, e.clientY - startY) > 10) cancel();
++    });
++    ['pointerup', 'pointercancel', 'pointerleave'].forEach(type => container.addEventListener(type, cancel));
++    container.addEventListener('contextmenu', (e) => {
++        if (e.target.closest(selector) && e.pointerType !== 'mouse') e.preventDefault();
++    });
++}
++
++// ── Numbers that change right away ───────────────────────────────────────────
++
++/** Add delta to the first number in el's text ("3 saves" -> "4 saves") with a small pop. */
++export function bumpCount(el, delta, { format } = {}) {
++    if (!el) return;
++    const current = Number((el.dataset.count ?? el.textContent.match(/-?\d+/)?.[0]) || 0);
++    const next = Math.max(0, current + delta);
++    el.dataset.count = next;
++    el.textContent = format ? format(next) : el.textContent.replace(/-?\d+/, next);
++    el.classList.remove('bump');
++    void el.offsetWidth;            // restart the animation
++    el.classList.add('bump');
++}
++
++export const plural = (n, one, many = one + 's') => `${n} ${n === 1 ? one : many}`;
+diff --git a/src/assets/users.js b/src/assets/users.js
+index 047d8dd..2525648 100644
+--- a/src/assets/users.js
++++ b/src/assets/users.js
+@@ -1,138 +1,100 @@
+-// import { setCurrentExpanded } from "./popstate.js";
++// assets/users.js: the profile page (/user/name)
++//   Follow / Following  changes and counts at once; goes back if the server says no
++//   followers / following  opens the list of people
++
+ import { toast } from './toast.js';
+ import { avatarUrl } from './recipe-cards.js';
++import { api, requireLogin, bumpCount } from './ui.js';
+ 
+ document.addEventListener('DOMContentLoaded', () => {
+-
+     const followButton = document.getElementById('follow-button');
+-    
+-    if (followButton) {
+-
+-        followButton.addEventListener('click', async () => {
+-
+-        let response = fetch('/api/follow_user.php', {
+-            method: 'POST',
+-            headers: {
+-                'Content-Type': 'application/json'
+-            },
+-            body: JSON.stringify({ followed_id: followButton.dataset.id })
+-        }).then(res => res.json())
+-          .then(data => {
+-              if (data.success) {
+-                  followButton.textContent = followButton.textContent === 'Follow' ? 'Unfollow' : 'Follow';
+-              } else {
+-                  toast.error(data.error || 'Failed to update follow status.');
+-              }
+-          })
+-          .catch((error) => {
+-              toast.error('An error occurred while trying to update follow status.' + 'error: '+ error);
+-          });
+-        });
+-    }
+-
+-    const followerCount = document.getElementById('follower-count');
+-    followerCount.addEventListener('click', showFollowerList);
+-    const followingCount = document.getElementById('following-count');
+-    followingCount.addEventListener('click', showFollowerList);
++    followButton?.addEventListener('click', () => toggleFollow(followButton));
+ 
++    document.getElementById('follower-count')?.addEventListener('click', (e) => showPeople(e.currentTarget, 'followers'));
++    document.getElementById('following-count')?.addEventListener('click', (e) => showPeople(e.currentTarget, 'following'));
+ });
+ 
+-function showFollowerList(event) {
++function showFollowState(button, following) {
++    button.setAttribute('aria-pressed', String(following));
++    button.textContent = following ? 'Following' : 'Follow';
++    button.classList.toggle('p', !following);   // "Follow" is the main action; "Following" is quiet
++}
++
++function setFollowerCount(n) {
++    const stat = document.getElementById('follower-count');
++    if (!stat) return;
++    stat.innerHTML = `<strong>${n}</strong> ${n === 1 ? 'follower' : 'followers'}`;
++}
++
++async function toggleFollow(button) {
++    if (!await requireLogin('follow people')) return;
++    if (button.disabled) return;
++
++    const wasFollowing = button.getAttribute('aria-pressed') === 'true';
++    const countEl = document.querySelector('#follower-count strong');
++    const before = Number(countEl?.textContent) || 0;
++
++    // Show the result right away…
++    showFollowState(button, !wasFollowing);
++    setFollowerCount(before + (wasFollowing ? -1 : 1));
++    bumpCount(document.querySelector('#follower-count strong'), 0);
++    button.disabled = true;
++
++    try {
++        const result = await api('/api/follow_user.php', { method: 'POST', json: { followed_id: button.dataset.id } });
++        showFollowState(button, result.following);
++        setFollowerCount(result.followers);         // …and correct it with the real total
++        if (result.following) toast.success(`You’re following ${document.querySelector('.user-profile-name')?.textContent.trim()}`);
++    } catch (error) {
++        showFollowState(button, wasFollowing);      // …or put it back
++        setFollowerCount(before);
++        toast.error(error.message || 'Could not update follow');
++    } finally {
++        button.disabled = false;
++    }
++}
++
++async function showPeople(stat, type) {
+     const modal = document.getElementById('follower-modal');
+     const title = document.getElementById('follower-modal-title');
+     const list = document.getElementById('follower-list');
+-    const isFollower = event.target.id === 'follower-count';
+-    const userId = event.target.dataset.id;
+-
+-    title.textContent = isFollower ? 'Followers' : 'Following';
+-    list.innerHTML = '';
+-
+-    fetch(`/api/follow_user.php?user_id=${userId}&type=${isFollower ? 'followers' : 'following'}`)
+-        .then(res => res.json())
+-        .then(users => {
+-            users.forEach(user => {
+-                const userElement = document.createElement('div');
+-                userElement.className = 'follower-item';
+-                userElement.addEventListener('click', () => {
+-                    window.location.href = `/user/${encodeURIComponent(user.username)}`;
+-                });
+-                list.appendChild(userElement);
+-                const userimg = document.createElement('img');
+-                userimg.src = avatarUrl(user.username, user.image_base);
+-                userimg.dataset.fallback = avatarUrl(user.username, user.image_base, '');   // pictures from before the _200 size existed
+-                userimg.loading = 'lazy';
+-                userimg.alt = `${user.username}'s profile picture`;
+-                userimg.className = 'follower-profile-pic';
+-                userElement.appendChild(userimg);
+-                const usernameElement = document.createElement('span');
+-                usernameElement.textContent = user.username;
+-                userElement.appendChild(usernameElement);
+-            });
+-        })
+-        .catch(error => {
+-            toast.error('Failed to load followers');
+-        });
+-
+-    // modal.classList.remove('hidden');
+-}
+ 
+-// export async function loadUser(username) {
+-//     setCurrentExpanded('user');
+-
+-//     const response = await fetch(`/api/fetch_user.php?username=${encodeURIComponent(username)}`, {
+-//         method: 'GET'
+-//     });
+-
+-//     const user = await response.json();
+-    
+-//     if (response.ok) {
+-//         userID = user.id;
+-
+-//         const userProfileModal = document.getElementById('user-profile');
+-//         const imgElement = userProfileModal.querySelector('.profile-picture');
+-//         const nameElement = userProfileModal.querySelector('.user-profile-name');
+-//         const bioElement = userProfileModal.querySelector('.user-profile-bio');
+-
+-//         nameElement.textContent = user.username;
+-//         bioElement.textContent = user.bio || '';
+-
+-//         if (user.image_base) {
+-//             imgElement.src = `/uploads/profile_pictures/${user.image_base}_200.webp`;
+-//             imgElement.alt = `${user.username}'s profile picture`;
+-//         } else {
+-//             imgElement.src = `/uploads/profile_pictures/${user.username}_avatar.svg`;
+-//             imgElement.alt = `${user.username}'s default avatar`;
+-//         }
+-
+-//         userProfileModal.classList.remove('hidden');
+-
+-//         const followButton = document.getElementById('follow-button');
+-
+-//         if (!user.isSelf) {
+-//             followButton.classList.remove('hidden');
+-//                         let response = await fetch(`/api/follow_user.php?followed_id=${encodeURIComponent(userID)}`, {
+-//                 method: 'GET'
+-//             });
+-//             const data = await response.json();
+-
+-//             if (data.is_following) {
+-//                 followButton.textContent = 'Unfollow';
+-//             } else {
+-//                 followButton.textContent = 'Follow';
+-//             }
+-//         } else {
+-//             // TODO show edit buttons for bio and image
+-//             followButton.classList.add('hidden');
+-//         }
+-
+-//     } else {
+-//         alert(user.error || 'Failed to load user information.');
+-//     }
+-
+-//     window.history.pushState(
+-//         {type: 'user', slug: username},
+-//         '',
+-//         `/user/${username}`
+-//     );
+-// }
++    title.textContent = type === 'followers' ? 'Followers' : 'Following';
++    list.replaceChildren(Object.assign(document.createElement('p'), { className: 'rv-muted', textContent: 'Loading…' }));
++    modal.classList.remove('hidden');
++
++    let people;
++    try {
++        people = await api('/api/follow_user.php', { query: { user_id: stat.dataset.id, type } });
++    } catch (error) {
++        list.replaceChildren(Object.assign(document.createElement('p'), { className: 'rv-muted', textContent: 'Could not load the list. Try again.' }));
++        return;
++    }
++
++    if (!people.length) {
++        list.replaceChildren(Object.assign(document.createElement('p'), {
++            className: 'rv-muted',
++            textContent: type === 'followers' ? 'No followers yet.' : 'Not following anyone yet.',
++        }));
++        return;
++    }
++
++    list.replaceChildren(...people.map(user => {
++        const link = document.createElement('a');
++        link.className = 'follower-item';
++        link.href = `/user/${encodeURIComponent(user.username)}`;
++
++        const img = document.createElement('img');
++        img.className = 'follower-profile-pic';
++        img.src = avatarUrl(user.username, user.image_base);
++        img.dataset.fallback = avatarUrl(user.username, user.image_base, '');   // pictures from before the _200 size existed
++        img.loading = 'lazy';
++        img.alt = '';
+ 
++        const name = document.createElement('span');
++        name.textContent = user.username;
++
++        link.append(img, name);
++        return link;
++    }));
++}
+diff --git a/src/auth/google_callback.php b/src/auth/google_callback.php
+index 63cd91c..1f659f9 100644
+--- a/src/auth/google_callback.php
++++ b/src/auth/google_callback.php
+@@ -82,6 +82,7 @@ if ($row) {
+ 
+ $db->commit();
+ 
++session_regenerate_id(true);
+ $_SESSION['user_id'] = $userId;
+ header('Location: /dashboard.php');
+ exit;
+diff --git a/src/auth/login.php b/src/auth/login.php
+index c44f710..df56e4d 100644
+--- a/src/auth/login.php
++++ b/src/auth/login.php
+@@ -3,32 +3,51 @@
+ require_once __DIR__ . '/../includes/session.php';
+ require_once __DIR__ . '/../includes/db.php';
+ 
+-$db = db();
++// The login form posts with fetch() and wants JSON back; without JavaScript it's a normal form post.
++$wantsJson = str_contains($_SERVER['HTTP_ACCEPT'] ?? '', 'application/json');
++
++function loginFailed(bool $json, string $message, int $status): never {
++    http_response_code($status);
++    if ($json) {
++        header('Content-Type: application/json; charset=utf-8');
++        echo json_encode(['success' => false, 'error' => $message]);
++    } else {
++        echo htmlspecialchars($message);
++    }
++    exit;
++}
+ 
+-$user = trim($_POST['user'] ?? '');
+-$password = trim($_POST['password'] ?? '');
++if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
++    loginFailed($wantsJson, 'Use the login form.', 405);
++}
+ 
+-$stmt = $db->prepare("
+-SELECT u.id, ap.password_hash
+-FROM users u
+-JOIN auth_providers ap ON ap.user_id = u.id
+-WHERE (u.email = :user or u.username = :user) AND ap.provider = 'local'
+-");
++$identifier = trim($_POST['user'] ?? '');
++$password = (string)($_POST['password'] ?? '');
+ 
+-$stmt->execute([
+-    ':user' => $user
+-]);
++if ($identifier === '' || $password === '') {
++    loginFailed($wantsJson, 'Fill in your email or username and your password.', 400);
++}
+ 
++$stmt = db()->prepare("
++    SELECT u.id, ap.password_hash
++    FROM users u
++    JOIN auth_providers ap ON ap.user_id = u.id
++    WHERE (u.email = :user OR u.username = :user) AND ap.provider = 'local'
++");
++$stmt->execute([':user' => $identifier]);
+ $user = $stmt->fetch();
+ 
+ if (!$user || !password_verify($password, $user['password_hash'])) {
+-    http_response_code(401);
+-    exit('invalid credentials');
++    loginFailed($wantsJson, 'That email/username and password don’t match.', 401);
+ }
+ 
++session_regenerate_id(true);   // a new session id on login, so an old (possibly planted) one is worthless
+ $_SESSION['user_id'] = $user['id'];
+ 
+-
++if ($wantsJson) {
++    header('Content-Type: application/json; charset=utf-8');
++    echo json_encode(['success' => true]);
++    exit;
++}
+ header('Location: /index.php');
+ exit;
+-?>
+\ No newline at end of file
+diff --git a/src/auth/signup.php b/src/auth/signup.php
+index 6b0cbb4..6d91e00 100644
+--- a/src/auth/signup.php
++++ b/src/auth/signup.php
+@@ -22,7 +22,7 @@ $password = trim($_POST['password'] ?? '');
+ 
+ if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+     http_response_code(400);
+-    exit;
++    exit('Enter a valid email address');
+ }
+ 
+ // The username ends up in file names, URLs (/user/name) and pages: letters, digits, _ . - only.
+@@ -78,6 +78,7 @@ try {
+     
+     $db->commit();
+     
++    session_regenerate_id(true);
+     $_SESSION['user_id'] = $userId;
+     header('Location: /index.php');
+     exit;
+@@ -87,7 +88,7 @@ try {
+ 
+     if ($e->getCode() === '23505') {
+         http_response_code(409);
+-        exit('Email or username already exists');
++        exit('That email or username is already taken');
+     }
+ 
+     throw $e;
+diff --git a/src/includes/modules.php b/src/includes/modules.php
+index 583368f..5c39aeb 100644
+--- a/src/includes/modules.php
++++ b/src/includes/modules.php
+@@ -65,20 +65,29 @@ function getNavBar()
+                 <?php endif; ?>
+             </div>
+         <?php else: ?>
+-            <button type="button" class="add" id="add-button" hidden>+ Add recipe</button>
++            <button type="button" class="add hm" id="add-button">+ Add recipe</button>   <!-- asks visitors to log in (landing-page.js) -->
+             <button type="button" id="log-in" class="add">Sign up / Log in</button>
+         <?php endif; ?>
+     </header>
+     
+     <?php if ($user): ?>
+-    <div class="modal hidden" id="social-modal">
+-        <div>
+-            <span class="close-button">&times;</span>
+-            <h2>Groups</h2>
++    <div class="modal hidden" id="social-modal" role="dialog" aria-modal="true" aria-labelledby="groups-title">
++        <button type="button" class="close-button" aria-label="Close">&times;</button>
++        <div class="dlg">
++            <h2 id="groups-title">Groups</h2>
++            <p class="rv-muted">Groups share shopping lists. Invite the people you cook and shop with.</p>
+             <div class="social-content" id="social-content">
+-                <div class="group-invitations" id="group-invitations"></div>
+-                <div class="group-list" id="group-list"></div>
+-                <button class="create-group">Create new group</button>
++                <section class="group-section" id="invitations-section" hidden>
++                    <h3>Invitations</h3>
++                    <div class="group-invitations" id="group-invitations"></div>
++                </section>
++                <section class="group-section">
++                    <h3>Your groups</h3>
++                    <div class="group-list" id="group-list"></div>
++                </section>
++                <button type="button" class="btn p create-group">
++                    <span class="material-symbols-outlined" aria-hidden="true">group_add</span>Create a group
++                </button>
+             </div>
+         </div>
+     </div>
+@@ -103,14 +112,26 @@ function getNavBar()
+         </div>
+     </div>
+ 
+-    <div class="modal hidden" id="shopping-list-modal">
+-        <div>
+-            <span class="close-button" aria-label="Close">&times;</span>
+-            <h2>Shopping List</h2>
+-            <button type="button" id="share-list-button" hidden>Share with group</button>
++    <div class="modal hidden" id="shopping-list-modal" role="dialog" aria-modal="true" aria-labelledby="sl-title">
++        <button type="button" class="close-button" aria-label="Close">&times;</button>
++        <div class="dlg sl-wrap">
++            <div class="sl-head">
++                <h2 class="sl-title" id="sl-title" tabindex="0">Shopping list</h2>
++                <button type="button" class="icon-btn sl-rename" aria-label="Rename this list" title="Rename" hidden>
++                    <span class="material-symbols-outlined" aria-hidden="true">edit</span>
++                </button>
++            </div>
++            <div class="sl-toolbar">
++                <select name="lists" id="lists" aria-label="Switch shopping list"></select>
++                <button type="button" class="btn" id="share-list-button" hidden>
++                    <span class="material-symbols-outlined" aria-hidden="true">group</span>Share
++                </button>
++                <button type="button" class="btn danger-quiet delete-list-button" hidden>
++                    <span class="material-symbols-outlined" aria-hidden="true">delete</span>Delete
++                </button>
++            </div>
+             <div class="share-panel" hidden></div>
+-            <select name="lists" id="lists" aria-label="Shopping list"></select>
+-            <button type="button" class="delete-list-button" hidden>Delete list</button>
++            <p class="sl-hint">Hold an item (or the list name) to edit it. Tick items as they go in the basket.</p>
+ 
+             <div class="shopping-list-content" id="shopping-list-content">
+                 <form id="shopping-list-form">
+@@ -118,7 +139,7 @@ function getNavBar()
+                     <div class="shopping-rows"></div>
+ 
+                     <details class="shopping-archive" hidden>
+-                        <summary>Archive (<span class="archive-count">0</span>), items are removed after 2 days</summary>
++                        <summary>In the basket (<span class="archive-count">0</span>), cleared after 2 days</summary>
+                         <div class="shopping-archive-rows"></div>
+                     </details>
+ 
+@@ -270,33 +291,42 @@ function getEmptyStateTemplate()
+ function getExpandedModal()
+ {
+     ?>
+-    <!-- Same class hooks as before so existing JS still fills it; new layout: ingredients stay on the left while you scroll the steps -->
+-    <div class="modal hidden" id="expanded-modal">
+-        <span class="close-button">&times;</span>
++    <!-- Recipe view. assets/recipe-modal.js fills it; ingredients stay in view while the steps scroll. -->
++    <div class="modal hidden" id="expanded-modal" role="dialog" aria-modal="true" aria-labelledby="recipe-view-title">
++        <button type="button" class="close-button" aria-label="Close">&times;</button>
+         <div class="dlg rv">
+             <div class="rvh">
+                 <div class="expanded-recipe-image"></div>
+-                <div>
++                <div class="rv-info">
+                     <div class="recipe-owner"></div>
+-                    <h2 class="recipe-title"></h2>
++                    <h2 class="recipe-title" id="recipe-view-title"></h2>
++                    <p class="recipe-forked-from" hidden></p>
+                     <div class="recipe-description"></div>
++                    <div class="rv-stats">
++                        <span class="course"><span class="course-type"></span></span>
++                        <span class="views"></span>
++                        <span class="rv-saves"></span>
++                        <span class="rv-forks"></span>
++                    </div>
+                     <div class="recipe-meta"><div class="recipe-time"></div></div>
+-                    <div class="views"></div>
+-                    <div class="course"><span class="course-type">Dinner</span></div>
+-                    <div class="recipe-tags"></div>
+-                    <div class="macros"><h5>Nutrition Information</h5><div class="macro-list"></div></div>
+                     <div class="recipe-actions"></div>
++                    <div class="recipe-tags"></div>
+                 </div>
+             </div>
+             <div class="rvb">
+                 <aside class="ingredients">
+                     <div class="flex">
+                         <h3>Ingredients</h3>
+-                        <button class="add-all-button">Add all to list</button>
++                        <button type="button" class="add-all-button">Add to list</button>
+                     </div>
++                    <p class="rv-hint">Tap an ingredient to tick it off while you cook.</p>
+                     <div class="ingredient-list"></div>
++                    <div class="macros">
++                        <h3>Nutrition <small>per serving</small></h3>
++                        <div class="macro-list"></div>
++                    </div>
+                 </aside>
+-                <div>
++                <div class="rv-steps">
+                     <h3>Steps</h3>
+                     <div class="steps"></div>
+                 </div>
+@@ -326,32 +356,46 @@ function getExpandedModal()
+ function getLoginModal()
+ {
+     ?>
+-    <div id="login-modal" class="modal hidden">
+-        <div class="modal-content">
+-            <span class="close-button">x</span>
+-            <!-- TODO add a option to display signup under login content -->
+-            <h2>Login or Sign Up</h2>
+-            <a href="/auth/google.php">Sign in with Google</a>
+-            <form id="signup-form">
+-                <label for="email">email</label>
+-                <input autocomplete="email" id="email" type="text" name="email">
+-                <label for="username">username</label>
+-                <input autocomplete="username" id="username" type="text" name="username">
+-                <label for="password">password</label>
+-                <input id="password" type="password" name="password">
+-                <label for="picture">Profile Picture</label>
+-                <input id="picture" type="file" name="picture" accept="image/jpeg,image/png,image/webp,image/gif"
+-                       <?= imageRulesAttributes() ?> aria-describedby="signup-photo-message">
+-                <p class="photo-message" id="signup-photo-message" role="alert" hidden></p>
+-                <button type="submit">Create account</button>
++    <div id="login-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="login-title">
++        <button type="button" class="close-button" aria-label="Close">&times;</button>
++        <div class="dlg auth">
++            <h2 id="login-title">Welcome to FoodDecider</h2>
++            <p class="auth-lead">Save recipes, write your own, and share shopping lists with the people you cook with.</p>
++
++            <div class="seg auth-tabs" role="tablist">
++                <button type="button" role="tab" class="selected" aria-selected="true" data-tab="login">Log in</button>
++                <button type="button" role="tab" aria-selected="false" data-tab="signup">Sign up</button>
++            </div>
++
++            <form id="login-form" method="POST" action="/auth/login.php" class="fm" data-tab-panel="login">
++                <div><label class="l" for="login-user">Email or username</label>
++                    <input class="in-t" id="login-user" type="text" name="user" autocomplete="username" required></div>
++                <div><label class="l" for="login-password">Password</label>
++                    <input class="in-t" id="login-password" type="password" name="password" autocomplete="current-password" required></div>
++                <p class="form-error" role="alert" hidden></p>
++                <button type="submit" class="btn p">Log in</button>
+             </form>
+-            <form method="POST" action="/auth/login.php">
+-                <label for="user">email or username</label>
+-                <input type="text" name="user">
+-                <label for="password">password</label>
+-                <input type="password" name="password">
+-                <button type="submit">log in</button>
++
++            <form id="signup-form" class="fm" data-tab-panel="signup" hidden>
++                <div><label class="l" for="email">Email</label>
++                    <input class="in-t" autocomplete="email" id="email" type="email" name="email" required></div>
++                <div><label class="l" for="username">Username</label>
++                    <input class="in-t" autocomplete="username" id="username" type="text" name="username" required
++                           minlength="3" maxlength="30" pattern="[A-Za-z0-9][A-Za-z0-9_.\-]{2,29}"
++                           title="3-30 letters, numbers, dots, dashes or underscores"></div>
++                <div><label class="l" for="password">Password</label>
++                    <input class="in-t" id="password" type="password" name="password" autocomplete="new-password" required minlength="8">
++                    <small class="field-hint">At least 8 characters</small></div>
++                <div><label class="l" for="picture">Profile picture <small>(optional)</small></label>
++                    <input id="picture" type="file" name="picture" accept="image/jpeg,image/png,image/webp,image/gif"
++                           <?= imageRulesAttributes() ?> aria-describedby="signup-photo-message">
++                    <p class="photo-message" id="signup-photo-message" role="alert" hidden></p></div>
++                <p class="form-error" role="alert" hidden></p>
++                <button type="submit" class="btn p">Create account</button>
+             </form>
++
++            <div class="auth-or"><span>or</span></div>
++            <a class="btn auth-google" href="/auth/google.php">Continue with Google</a>
+         </div>
+     </div>
+     <?php
+diff --git a/src/includes/recipe_adder.php b/src/includes/recipe_adder.php
+index fe0f4df..1d4e636 100644
+--- a/src/includes/recipe_adder.php
++++ b/src/includes/recipe_adder.php
+@@ -47,6 +47,12 @@ function addRecipe($recipeData) {
+ 
+         $recipeId = $stmt->fetchColumn();
+ 
++        // A fork: count it on the original (shown as "Forked N times")
++        if (!empty($recipeData['forked_from_recipe_id'])) {
++            $db->prepare("UPDATE recipes SET fork_count = fork_count + 1 WHERE id = :id")
++               ->execute([':id' => $recipeData['forked_from_recipe_id']]);
++        }
++
+         if (!empty($recipeData['tags'])) {
+             saveTags($db, $recipeId, $recipeData['tags']);
+         }
+diff --git a/src/includes/recipe_fetcher.php b/src/includes/recipe_fetcher.php
+index fcd5416..e8f23e0 100644
+--- a/src/includes/recipe_fetcher.php
++++ b/src/includes/recipe_fetcher.php
+@@ -29,7 +29,11 @@ function getRecipe($id): ?array {
+             r.created_at,
+             r.image_base,
+             r.servings,
+- 
++            r.fork_count,
++            -- Forked from: only when the original still exists and this viewer may see it
++            parent.id       AS forked_from_id,
++            parent.title    AS forked_from_title,
++            parent_owner.username AS forked_from_username,
+             COALESCE(saves.saves, 0) AS saves,
+             EXISTS (
+                 SELECT 1 FROM saved_recipes s
+@@ -50,6 +54,11 @@ function getRecipe($id): ?array {
+  
+         LEFT JOIN users u
+             ON r.owner_id = u.id
++        LEFT JOIN recipes parent
++            ON parent.id = r.forked_from_recipe_id
++           AND (parent.is_public = '1' OR parent.owner_id = :user)
++        LEFT JOIN users parent_owner
++            ON parent_owner.id = parent.owner_id
+  
+         -- steps
+         LEFT JOIN LATERAL (
+@@ -74,9 +83,10 @@ function getRecipe($id): ?array {
+                     'name', ri.ingredient_name,
+                     'amount', ri.amount,
+                     'unit', ri.unit,
++                    'size', ri.size,
+                     'section_id', ri.section_id
+                 )
+-                ORDER BY ri.id
++                ORDER BY ri.position NULLS LAST, ri.id
+             ) AS recipe_ingredients
+             FROM recipe_ingredients ri
+             WHERE ri.recipe_id = r.id
+diff --git a/src/includes/user_fetcher.php b/src/includes/user_fetcher.php
+index 87e4784..45a3c14 100644
+--- a/src/includes/user_fetcher.php
++++ b/src/includes/user_fetcher.php
+@@ -9,8 +9,9 @@ function grabUserInfo($requested_user_UUID = null, $requested_user_username = nu
+         $db = db();
+         $stmt = $db->prepare("
+             SELECT u.id, u.username, u.email, u.bio, u.image_base, 
+-                   COUNT(fs.followed_id) AS followers_count, 
+-                   COUNT(fd.follower_id) AS following_count
++                   -- DISTINCT: the two joins multiply rows (2 followers x 3 following counted as 6 each)
++                   COUNT(DISTINCT fs.follower_id) AS followers_count,
++                   COUNT(DISTINCT fd.followed_id) AS following_count
+             FROM users u
+             LEFT JOIN followers fs ON u.id = fs.followed_id
+             LEFT JOIN followers fd ON u.id = fd.follower_id
+@@ -23,7 +24,7 @@ function grabUserInfo($requested_user_UUID = null, $requested_user_username = nu
+         return $stmt->fetch(PDO::FETCH_ASSOC);
+ 
+     } catch (Throwable $e) {
+-        http_response_code(500);
+-        echo json_encode(['error' => 'Failed to fetch user data ' . $e->getMessage()]);
++        error_log('grabUserInfo: ' . $e->getMessage());
++        return null;
+     }
+ }
+\ No newline at end of file
+diff --git a/src/user.php b/src/user.php
+index 6271224..b38383a 100644
+--- a/src/user.php
++++ b/src/user.php
+@@ -5,25 +5,18 @@ require_once __DIR__ . '/includes/follow_check.php';
+ require_once __DIR__ . '/includes/modules.php';
+ 
+ $user = null;
+-$requestUri = $_SERVER['REQUEST_URI'];
+-$requestUri = trim($requestUri, '/');
++$path = trim(parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH) ?? '', '/');
+ 
+-if (preg_match('/\/?user\/([^\/]+)/', $requestUri, $matches)) {
+-    $username = htmlspecialchars($matches[1]);
+-    if ($username) {
+-        $user = grabUserInfo(null, $username);
+-    }
++if (preg_match('~^user/([^/]+)$~', $path, $matches)) {
++    $user = grabUserInfo(null, rawurldecode($matches[1]));
+ }
+ 
+-$currentUser = null;
+-$isSelf = false;
+-$isFollower = false;
+ $loggedIn = isset($_SESSION['user_id']);
++$isSelf = $user && $loggedIn && (string)$user['id'] === (string)$_SESSION['user_id'];
++$isFollower = $user && $loggedIn && !$isSelf && checkIfFollowing($_SESSION['user_id'], $user['id']);
+ 
+-if ($loggedIn) {
+-    $currentUser = grabUserInfo($_SESSION['user_id']); 
+-    $isSelf = $user['id'] === $_SESSION['user_id'];
+-    $isFollower = checkIfFollowing($_SESSION['user_id'], $user['id']);
++if (!$user) {
++    http_response_code(404);
+ }
+ 
+ ?>
+@@ -35,7 +28,7 @@ if ($loggedIn) {
+     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+     <?php getHeadAssets(); ?>
+ 
+-    <!-- Migth implement crawler friendly properties -->
++    <title><?= $user ? htmlspecialchars($user['username']) . ' on FoodDecider' : 'Profile not found - FoodDecider' ?></title>
+ 
+ </head>
+ <body>
+@@ -45,44 +38,56 @@ if ($loggedIn) {
+     <?php echo getExpandedModal(); ?>
+     <?php echo getFilterMenu(); ?>
+ 
+-    <div class="modal hidden" id="follower-modal">
+-        <div class="modal-content">
+-            <span class="close-button">&times;</span>
++    <div class="modal hidden" id="follower-modal" role="dialog" aria-modal="true" aria-labelledby="follower-modal-title">
++        <button type="button" class="close-button" aria-label="Close">&times;</button>
++        <div class="dlg">
+             <h2 id="follower-modal-title"></h2>
+-            <div id="follower-list"></div>
+-         </div>
++            <div id="follower-list" class="follower-list"></div>
++        </div>
+     </div>
+ 
++    <?php if (!$user): ?>
++    <main class="user-page">
++        <div class="empty">
++            <h3>No one by that name</h3>
++            <p>The profile may have been renamed or removed.</p>
++            <a class="btn" href="/">Back to recipes</a>
++        </div>
++    </main>
++    <?php else: ?>
++    <main class="user-page">
+     <div class="user-profile">
+-        <?php if ($user['image_base']): ?>
+-                <img class="user-profile-img" src="/uploads/profile_pictures/<?php echo htmlspecialchars($user['image_base']); ?>.webp" alt="profile picture"></img>
+-            <?php else: ?>
+-                <img class="user-profile-img" src="/uploads/profile_pictures/<?php echo htmlspecialchars($user['username']); ?>_avatar.svg" alt="profile picture"></img>
++        <img class="user-profile-img"
++             src="<?= $user['image_base']
++                ? '/uploads/profile_pictures/' . htmlspecialchars($user['image_base']) . '.webp'
++                : '/uploads/profile_pictures/' . htmlspecialchars($user['username']) . '_avatar.svg' ?>"
++             alt="">
++        <div class="user-profile-text">
++            <h1 class="user-profile-name"><?= htmlspecialchars($user['username']) ?></h1>
++            <?php if (!empty($user['bio'])): ?>
++                <p class="user-profile-bio"><?= htmlspecialchars($user['bio']) ?></p>
+             <?php endif; ?>
+-        <h2 class="user-profile-name"> <?php echo htmlspecialchars($user['username']) ?> </h2>
+-        <div class="follower-count-container flex">
+-            <p id="follower-count" data-id="<?php echo $user['id']?>"> followers:  <?php echo htmlspecialchars($user['followers_count']); ?></p>
+-            <p id="following-count" data-id="<?php echo $user['id']?>"> follows: <?php echo htmlspecialchars($user['following_count']); ?></p>
+-        </div>
+-        <?php echo isset($user['bio']) ? '<p class="user-profile-bio">' . htmlspecialchars($user['bio']) . '</p>' : ''; ?>
+-        <?php if (!$isSelf && $loggedIn): ?>
+-            <button class="follow-button" id="follow-button" data-id="<?php echo $user['id']?>"> <?php echo $isFollower ? 'Unfollow' : 'Follow'; ?></button>
+-        <?php endif; ?>
+-        <h3>User's recipes</h3>
+-        <div class="recipe-card-container" id="recipe-list"></div>
+-        
+-        <div class="modal hidden" id="expanded-modal">
+-            <span class="close-button">&times;</span>
+-            <div class="modal-content" id="expanded-content">
++            <div class="follower-count-container">
++                <button type="button" class="stat" id="follower-count" data-id="<?= htmlspecialchars($user['id']) ?>">
++                    <strong data-count="<?= (int)$user['followers_count'] ?>"><?= (int)$user['followers_count'] ?></strong>
++                    <?= (int)$user['followers_count'] === 1 ? 'follower' : 'followers' ?>
++                </button>
++                <button type="button" class="stat" id="following-count" data-id="<?= htmlspecialchars($user['id']) ?>">
++                    <strong><?= (int)$user['following_count'] ?></strong> following
++                </button>
+             </div>
++            <?php if (!$isSelf): ?>
++                <button class="btn <?= $isFollower ? '' : 'p' ?> follow-button" id="follow-button"
++                        data-id="<?= htmlspecialchars($user['id']) ?>" aria-pressed="<?= $isFollower ? 'true' : 'false' ?>">
++                    <?= $isFollower ? 'Following' : 'Follow' ?>
++                </button>
++            <?php endif; ?>
+         </div>
+-
+-        <?php 
+-        echo getFilterMenu(); 
+-        echo getExpandedModal();    
+-        ?>
+-
+     </div>
++        <h2 class="user-recipes-title"><?= $isSelf ? 'Your recipes' : htmlspecialchars($user['username']) . '’s recipes' ?></h2>
++        <div class="recipe-card-container" id="recipe-list"></div>
++    </main>
++    <?php endif; ?>
+     <?php if(!$loggedIn) {
+         echo getLoginModal();
+     }; ?>

@@ -47,6 +47,12 @@ function addRecipe($recipeData) {
 
         $recipeId = $stmt->fetchColumn();
 
+        // A fork: count it on the original (shown as "Forked N times")
+        if (!empty($recipeData['forked_from_recipe_id'])) {
+            $db->prepare("UPDATE recipes SET fork_count = fork_count + 1 WHERE id = :id")
+               ->execute([':id' => $recipeData['forked_from_recipe_id']]);
+        }
+
         if (!empty($recipeData['tags'])) {
             saveTags($db, $recipeId, $recipeData['tags']);
         }

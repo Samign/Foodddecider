@@ -1,5 +1,6 @@
 import { renderRecipeList, getPickHtml, getEmptyPickHtml } from './recipe-cards.js';
-import { expandRecipe, pushRecipeState } from './recipe-modal.js';
+import { openRecipe } from './recipe-modal.js';
+import { toast } from './toast.js';
 import { toggleHidden } from './recipe-data.js';
 import { clearTags, renderTagSelection } from './tags.js';
 
@@ -16,7 +17,6 @@ let courseContainer = null;
 // ── Boot ──────────────────────────────────────────────────────────────────────
 
 export function init() {
-    console.log("init called for recipes.js")
     path = window.location.pathname;
 
     const activeButton = document.querySelector('.recipe-category-buttons .nav-buttons.active');
@@ -40,6 +40,23 @@ export function init() {
 }
 
 document.addEventListener('tagsLoaded', loadRecipes);
+
+// Added, edited or forked a recipe: refresh the grid so it shows up
+document.addEventListener('recipe:saved', () => loadRecipes({ quiet: true }));
+
+// Deleted: take the card away and count down at once, no reload needed
+document.addEventListener('recipe:deleted', (e) => {
+    const id = e.detail.id;
+    document.querySelectorAll(`.recipe-card[data-id="${id}"]`).forEach(card => card.remove());
+    const list = document.getElementById('recipe-list');
+    if (!list) return;
+    const count = Math.max(0, Number(list.dataset.count || 0) - 1);
+    list.dataset.count = count;
+    document.dispatchEvent(new CustomEvent('recipesLoaded', { detail: { count } }));
+    if (!list.querySelector('.recipe-card')) renderRecipeList(list, []);
+    const pick = document.getElementById('pick');
+    if (pick?.querySelector(`.pick-cook[data-id="${id}"]`)) pick.hidden = true;
+});
 
 // Logged-out visitors only get Discover, and only there is "Saved" pointless
 function subCategoryHtml(categoryId) {
@@ -124,8 +141,7 @@ function initEventListeners() {
         const cook = e.target.closest('.pick-cook');
         if (cook) {
             const id = parseInt(cook.dataset.id);
-            pushRecipeState(id);
-            expandRecipe(id);
+            openRecipe(id);
         } else if (e.target.closest('.pick-another')) {
             randomRecipe();
         } else if (e.target.closest('.empty-clear')) {
@@ -291,7 +307,6 @@ function renderCourseSelection() {
         el.classList.toggle('selected', on);
         el.setAttribute('aria-pressed', String(on));
     });
-    console.log("Selected courses:", [...selectedCourses]);
 }
 
 // ── Data loading ──────────────────────────────────────────────────────────────
@@ -325,21 +340,36 @@ function buildFormData() {
     return formData;
 }
 
-async function loadRecipes() {
+async function loadRecipes({ quiet = false } = {}) {
 
     const token = ++loadToken;
 
     const recipeList = document.getElementById('recipe-list');
-    recipeList.innerHTML = '<p>Loading recipes...</p>';
+    // Keep the old cards on screen (dimmed) while the new ones load: no jumping layout
+    recipeList.classList.add('is-loading');
+    if (!quiet && !recipeList.querySelector('.recipe-card')) recipeList.innerHTML = '<p class="rv-muted">Loading recipes…</p>';
 
-    const response = await fetch('/api/recipes/fetch_recipes.php', {
-        method: 'POST',
-        body: buildFormData()
-    });
-
-    const recipes = await response.json();
+    let recipes;
+    try {
+        const response = await fetch('/api/recipes/fetch_recipes.php', {
+            method: 'POST',
+            body: buildFormData()
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        recipes = await response.json();
+        if (!Array.isArray(recipes)) throw new Error('Unexpected answer');
+    } catch (error) {
+        if (token !== loadToken) return;
+        recipeList.classList.remove('is-loading');
+        recipeList.innerHTML = `<div class="empty"><h3>Recipes didn’t load</h3>
+            <p>Check your connection and try again.</p>
+            <button type="button" class="btn retry-load">Try again</button></div>`;
+        recipeList.querySelector('.retry-load').addEventListener('click', () => loadRecipes());
+        return;
+    }
 
     if (token !== loadToken) return; // Ignore if a newer request has been made
+    recipeList.classList.remove('is-loading');
     renderRecipeList(recipeList, recipes);
     recipeList.dataset.count = recipes.length;   // for anything that loads after this first render
     document.dispatchEvent(new CustomEvent('recipesLoaded', { detail: { count: recipes.length } }));
@@ -354,12 +384,16 @@ async function randomRecipe() {
     formData.append('action', 'random');
     if (lastPickId) formData.append('exclude_id', lastPickId);   // "Another one" never repeats the last pick
 
-    const response = await fetch('/api/recipes/fetch_recipes.php', {
-        method: 'POST',
-        body: formData
-    });
-    const result = await response.json();
-    const recipe = result[0];
+    let result;
+    try {
+        const response = await fetch('/api/recipes/fetch_recipes.php', { method: 'POST', body: formData });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        result = await response.json();
+    } catch {
+        toast.error('Could not pick a recipe right now. Try again.');
+        return;
+    }
+    const recipe = Array.isArray(result) ? result[0] : null;
 
     // Only one recipe fits and it was the last pick: show it again rather than "nothing found"
     if (!recipe && lastPickId) {
@@ -369,7 +403,8 @@ async function randomRecipe() {
 
     // No pick card on this page (e.g. a profile): keep the old behaviour
     if (!pick) {
-        if (recipe) { pushRecipeState(recipe.id); expandRecipe(recipe.id); }
+        if (recipe) openRecipe(recipe.id);
+        else toast.info('No recipe fits those filters.');
         return;
     }
 

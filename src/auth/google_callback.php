@@ -82,6 +82,7 @@ if ($row) {
 
 $db->commit();
 
+session_regenerate_id(true);
 $_SESSION['user_id'] = $userId;
 header('Location: /dashboard.php');
 exit;

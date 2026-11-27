@@ -21,6 +21,11 @@ if ($request_method === 'POST') {
 
     if ($id) {
         $recipe = getRecipe($id);
+        if (!$recipe) {
+            http_response_code(404);   // deleted, or private to someone else
+            echo json_encode(['error' => 'This recipe doesn’t exist any more, or it’s private.']);
+            exit;
+        }
         echo json_encode($recipe);
         exit;
     }

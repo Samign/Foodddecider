@@ -12,6 +12,7 @@
 import { request, ITEMS_API, LISTS_API, listLabel, getLastListId, setLastListId } from './shopping-api.js';
 import { toast } from './toast.js';
 import { confirmDialog, promptDialog } from './dialog.js';
+import { onLongPress } from './ui.js';
 
 const POLL_EVERY_MS = 4000;
 const ARCHIVE_DELAY_MS = 600;   // how long a checked item stays struck through in the list before it moves
@@ -111,8 +112,17 @@ function createShoppingList(modal, firstListId) {
             .then(() => row.classList.remove('save-failed'))
             .catch(error => {
                 row.classList.add('save-failed');
+                toastSaveFailure();
             })
             .finally(() => { savesInFlight--; });
+    }
+
+    // One toast for a burst of failed saves (e.g. offline), not one per keystroke
+    let lastFailureToast = 0;
+    function toastSaveFailure() {
+        if (Date.now() - lastFailureToast < 5000) return;
+        lastFailureToast = Date.now();
+        toast.error('A change to the list didn’t save. Check your connection; it’s marked in red.');
     }
 
     function send(body) {
@@ -332,7 +342,6 @@ function createShoppingList(modal, firstListId) {
         const row = input.closest(ROW);
 
         if (event.key === 'Enter') {
-            console.log('Enter pressed in row', row.dataset.id, 'with text', input.value);
             event.preventDefault();
             if (input.value.trim() === '') return;
             commit(row);
@@ -356,6 +365,19 @@ function createShoppingList(modal, firstListId) {
     }
 
     document.addEventListener('change', onChange);
+
+    // Hold an item: edit it (select all, ready to retype). On phones a tap only places the cursor,
+    // so this is the quick way to change an item. A checked item is put back on the list first.
+    onLongPress(modal, ROW, row => {
+        const input = inputOf(row);
+        if (!row.dataset.id) { input.focus(); return; }
+        if (row.classList.contains('checked')) toggleChecked(row, false);
+        row.classList.add('is-editing');
+        input.readOnly = false;
+        input.focus();
+        input.select();
+    });
+    modal.addEventListener('focusout', e => e.target.closest(ROW)?.classList.remove('is-editing'));
     // archive.addEventListener('change', onChange);
 
     // ---- start -------------------------------------------------------------
@@ -415,6 +437,72 @@ export async function init(modal) {
         renderPicker(picker, lists, currentId);
         const list = createShoppingList(modal, currentId);
         
+        const title = modal.querySelector('.sl-title');
+        const renameButton = modal.querySelector('.sl-rename');
+        const currentList = () => lists.find(item => String(item.id) === currentId);
+        const showTitle = () => {
+            const current = currentList();
+            title.textContent = current ? current.name : 'Shopping list';
+            title.title = current?.is_owner ? 'Hold or double-click to rename' : `Shared by ${current?.owner_username ?? 'someone else'}`;
+            if (renameButton) renameButton.hidden = !current?.is_owner;
+        };
+
+        // Rename in place: the title becomes a text field. Enter or leaving saves, Escape cancels.
+        function startRename() {
+            const current = currentList();
+            if (!current) return;
+            if (!current.is_owner) {
+                toast.info(`Only ${current.owner_username ?? 'the owner'} can rename this list`);
+                return;
+            }
+            if (title.querySelector('input')) return;
+
+            const field = document.createElement('input');
+            field.className = 'sl-title-input';
+            field.value = current.name;
+            field.maxLength = 255;
+            field.setAttribute('aria-label', 'List name');
+            title.replaceChildren(field);
+            field.focus();
+            field.select();
+
+            let done = false;
+            const finish = async (save) => {
+                if (done) return;
+                done = true;
+                const name = field.value.trim();
+                if (!save || !name || name === current.name) { showTitle(); return; }
+
+                const old = current.name;
+                current.name = name;                      // show it right away
+                showTitle();
+                renderPicker(picker, lists, currentId);
+                try {
+                    await request(LISTS_API, { method: 'POST', body: { action: 'rename', list_id: current.id, list_name: name } });
+                    toast.success('List renamed');
+                } catch {
+                    current.name = old;                   // put it back
+                    showTitle();
+                    renderPicker(picker, lists, currentId);
+                    toast.error('Could not rename the list');
+                }
+            };
+            field.addEventListener('keydown', e => {
+                e.stopPropagation();
+                if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+                if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(false); }
+            });
+            field.addEventListener('blur', () => finish(true));
+        }
+
+        onLongPress(modal, '.sl-title', startRename);
+        title.addEventListener('dblclick', startRename);
+        title.addEventListener('keydown', e => {
+            if (e.target !== title) return;   // keys typed in the rename field bubble up here too
+            if (e.key === 'F2' || e.key === 'Enter') { e.preventDefault(); startRename(); }
+        });
+        renameButton?.addEventListener('click', startRename);
+
         const deleteButton = modal.querySelector(DELETE_BUTTON);
         const shareButton = modal.querySelector(SHARE_BUTTON);
         const sharePanel = modal.querySelector(SHARE_PANEL);
@@ -424,6 +512,7 @@ export async function init(modal) {
             if (deleteButton) deleteButton.hidden = !isOwner;
             if (shareButton) shareButton.hidden = !isOwner;
             if (sharePanel) sharePanel.hidden = true;   // closed whenever the list changes
+            showTitle();
         }
         showOwnerControls();
 
@@ -450,6 +539,7 @@ export async function init(modal) {
                 renderPicker(picker, lists, currentId);
                 showOwnerControls();
                 list.switchList(currentId);
+                toast.success(`Created "${name}"`);
             } catch (error) {
                 picker.value = currentId;
                 toast.error('Could not create the list');
@@ -459,7 +549,7 @@ export async function init(modal) {
         deleteButton?.addEventListener('click', async () => {
             const current = lists.find(item => String(item.id) === currentId);
             if (!current?.is_owner) return;
-            if (!await confirmDialog({ title: 'Delete list', message: `Delete "${current.name}" and everything on it? This can't be undone.` })) return;
+            if (!await confirmDialog({ title: 'Delete list', message: `Delete "${current.name}" and everything on it? This can't be undone.`, confirmText: 'Delete', danger: true })) return;
 
             try {
                 await request(LISTS_API, { method: 'POST', body: { action: 'delete', list_id: current.id } });
@@ -473,6 +563,7 @@ export async function init(modal) {
                 renderPicker(picker, lists, currentId);
                 showOwnerControls();
                 list.switchList(currentId);
+                toast.success(`Deleted "${current.name}"`);
             } catch (error) {
                 toast.error('Could not delete the list');
             }
@@ -507,6 +598,7 @@ export async function init(modal) {
                     method: 'POST',
                     body: { action: checkbox.checked ? 'share' : 'unshare', list_id: currentId, group_id: checkbox.value }
                 });
+                toast.success(checkbox.checked ? 'Shared with the group' : 'No longer shared with the group');
             } catch (error) {
                 checkbox.checked = !checkbox.checked;   // put it back
                 toast.error('Could not change sharing');

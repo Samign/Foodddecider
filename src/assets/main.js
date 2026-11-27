@@ -42,6 +42,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (dragDrop.init) dragDrop.init(element);
     if (addRecipe.init) addRecipe.init(element);
+    if (sections.init) sections.init(element);   // Enter adds a row, Backspace removes it, arrows move between rows
   });
 
   // 3. Recipe Search & Suggestions
@@ -63,9 +64,14 @@ document.addEventListener('DOMContentLoaded', () => {
   loadModuleIfPresent('#shopping-list-modal', () => import('./list.js'));
 
   const profileModal = document.getElementById('profile-modal');
-  if (profileModal) {
-      document.querySelector('.current-user').addEventListener('click', () => {
-          profileModal.classList.toggle('hidden');
+  const avatar = document.querySelector('.current-user');
+  if (profileModal && avatar) {
+      const toggleProfile = () => profileModal.classList.toggle('hidden');
+      avatar.addEventListener('click', toggleProfile);
+      avatar.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleProfile(); } });
+      // Click anywhere else closes the little profile menu
+      document.addEventListener('click', e => {
+          if (!profileModal.contains(e.target) && !avatar.contains(e.target)) profileModal.classList.add('hidden');
       });
   }
   
@@ -92,11 +98,28 @@ toggle?.addEventListener('click', () => {
 media.addEventListener('change', syncToggle);
 syncToggle();
 
+// The dark backdrop belongs to the recipe view; the login dialog borrows it
+function hideOverlayIfUnused() {
+  const recipeOpen = !document.getElementById('expanded-modal')?.classList.contains('hidden');
+  const loginOpen = document.getElementById('login-modal') && !document.getElementById('login-modal').classList.contains('hidden');
+  if (!recipeOpen && !loginOpen) document.getElementById('modal-overlay')?.classList.add('hidden');
+}
+
+function closeModal(modal) {
+  if (!modal || modal.id === 'expanded-modal') return;   // the recipe view closes through history (recipe-modal.js)
+  modal.classList.add('hidden');
+  hideOverlayIfUnused();
+}
+
 document.addEventListener('click', (e) => {
-  if (e.target.matches('.close-button')) {
-    const modal = e.target.closest('.modal');
-    if (modal) {
-      modal.classList.add('hidden');
-    }
-  }
+  const close = e.target.closest('.close-button');
+  if (close) closeModal(close.closest('.modal'));
+  if (e.target.id === 'modal-overlay') closeModal(document.getElementById('login-modal'));
+});
+
+// Escape closes the top small window (shopping list, groups, filters...). Native dialogs handle their own.
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape' || document.querySelector('dialog[open]')) return;
+  const open = [...document.querySelectorAll('.modal:not(.hidden)')].filter(m => m.id !== 'expanded-modal');
+  if (open.length) closeModal(open[open.length - 1]);
 });

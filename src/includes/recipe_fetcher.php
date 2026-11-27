@@ -29,7 +29,11 @@ function getRecipe($id): ?array {
             r.created_at,
             r.image_base,
             r.servings,
- 
+            r.fork_count,
+            -- Forked from: only when the original still exists and this viewer may see it
+            parent.id       AS forked_from_id,
+            parent.title    AS forked_from_title,
+            parent_owner.username AS forked_from_username,
             COALESCE(saves.saves, 0) AS saves,
             EXISTS (
                 SELECT 1 FROM saved_recipes s
@@ -50,6 +54,11 @@ function getRecipe($id): ?array {
  
         LEFT JOIN users u
             ON r.owner_id = u.id
+        LEFT JOIN recipes parent
+            ON parent.id = r.forked_from_recipe_id
+           AND (parent.is_public = '1' OR parent.owner_id = :user)
+        LEFT JOIN users parent_owner
+            ON parent_owner.id = parent.owner_id
  
         -- steps
         LEFT JOIN LATERAL (
@@ -74,9 +83,10 @@ function getRecipe($id): ?array {
                     'name', ri.ingredient_name,
                     'amount', ri.amount,
                     'unit', ri.unit,
+                    'size', ri.size,
                     'section_id', ri.section_id
                 )
-                ORDER BY ri.id
+                ORDER BY ri.position NULLS LAST, ri.id
             ) AS recipe_ingredients
             FROM recipe_ingredients ri
             WHERE ri.recipe_id = r.id

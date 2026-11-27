@@ -100,6 +100,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         respond(['ok' => true]);
     }
 
+    if ($action === 'rename') {
+        $listId = (int)($in['list_id'] ?? 0);
+        $name = trim((string)($in['list_name'] ?? ''));
+        if ($name === '' || mb_strlen($name) > 255) respond(['error' => 'Give the list a name'], 422);
+        requireListOwner($db, $userId, $listId);
+
+        $stmt = $db->prepare("UPDATE shopping_lists SET list_name = :name WHERE id = :list AND user_id = :user");
+        bindAll($stmt, ['name' => $name, 'list' => $listId, 'user' => $userId]);
+        $stmt->execute();
+        respond(['ok' => true, 'name' => $name]);
+    }
+
     if ($action === 'delete') {
         $listId = (int)($in['list_id'] ?? 0);
         requireListOwner($db, $userId, $listId);

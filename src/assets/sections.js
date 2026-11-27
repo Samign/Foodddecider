@@ -3,14 +3,45 @@ import { groupBySection } from './recipe-data.js';
 let stepSectionCount = 0;
 let ingredientSectionCount = 0;
 
+// Keyboard in the ingredient and step lists:
+//   Enter              new row below (and never submits the whole form)
+//   Backspace (empty)  remove the row
+//   Arrow up / down    move to the row above / below, across sections and their titles
 export function init() {
     let form = document.querySelector('#add-recipe-form');
+    if (!form || form.dataset.sectionsBound) return;
+    form.dataset.sectionsBound = '1';
+
     form.addEventListener('keydown', (e) => {
         const target = e.target;
+        const container = target.closest('#ingredients, #instructions');
+        if (!container) return;
+
+        // The ingredient suggestions use the arrows and Enter while they're showing
+        if (suggestionsOpen(target) && ['ArrowUp', 'ArrowDown', 'Enter'].includes(e.key)) return;
+
+        if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+            const fields = [...container.querySelectorAll('.section-title-input, .ingredient-text, .instruction-text')];
+            const next = fields[fields.indexOf(target) + (e.key === 'ArrowUp' ? -1 : 1)];
+            if (next) {
+                e.preventDefault();
+                next.focus();
+                next.setSelectionRange?.(next.value.length, next.value.length);   // caret at the end
+            }
+            return;
+        }
+
         const type = target.classList.contains('instruction-text') ? 'steps'
                    : target.classList.contains('ingredient-text')   ? 'ingredients'
                    : null;
-        if (!type) return;
+        if (!type) {
+            // Enter in a section title jumps to its first row instead of submitting the form
+            if (e.key === 'Enter' && target.classList.contains('section-title-input')) {
+                e.preventDefault();
+                target.closest('.section-group')?.querySelector('.ingredient-text, .instruction-text')?.focus();
+            }
+            return;
+        }
  
         if (e.key === 'Enter') {
             e.preventDefault();
@@ -20,6 +51,12 @@ export function init() {
             removeRow(type, target);
         }
     });
+}
+
+function suggestionsOpen(input) {
+    const list = input.parentElement?.querySelector('.autocomplete-list')
+              ?? input.parentElement?.parentElement?.querySelector('.autocomplete-list');
+    return Boolean(list?.querySelector('.autocomplete-item'));
 }
 
 const SECTION_TYPES = {

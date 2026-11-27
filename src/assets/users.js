@@ -1,138 +1,100 @@
-// import { setCurrentExpanded } from "./popstate.js";
+// assets/users.js: the profile page (/user/name)
+//   Follow / Following  changes and counts at once; goes back if the server says no
+//   followers / following  opens the list of people
+
 import { toast } from './toast.js';
 import { avatarUrl } from './recipe-cards.js';
+import { api, requireLogin, bumpCount } from './ui.js';
 
 document.addEventListener('DOMContentLoaded', () => {
-
     const followButton = document.getElementById('follow-button');
-    
-    if (followButton) {
+    followButton?.addEventListener('click', () => toggleFollow(followButton));
 
-        followButton.addEventListener('click', async () => {
-
-        let response = fetch('/api/follow_user.php', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ followed_id: followButton.dataset.id })
-        }).then(res => res.json())
-          .then(data => {
-              if (data.success) {
-                  followButton.textContent = followButton.textContent === 'Follow' ? 'Unfollow' : 'Follow';
-              } else {
-                  toast.error(data.error || 'Failed to update follow status.');
-              }
-          })
-          .catch((error) => {
-              toast.error('An error occurred while trying to update follow status.' + 'error: '+ error);
-          });
-        });
-    }
-
-    const followerCount = document.getElementById('follower-count');
-    followerCount.addEventListener('click', showFollowerList);
-    const followingCount = document.getElementById('following-count');
-    followingCount.addEventListener('click', showFollowerList);
-
+    document.getElementById('follower-count')?.addEventListener('click', (e) => showPeople(e.currentTarget, 'followers'));
+    document.getElementById('following-count')?.addEventListener('click', (e) => showPeople(e.currentTarget, 'following'));
 });
 
-function showFollowerList(event) {
+function showFollowState(button, following) {
+    button.setAttribute('aria-pressed', String(following));
+    button.textContent = following ? 'Following' : 'Follow';
+    button.classList.toggle('p', !following);   // "Follow" is the main action; "Following" is quiet
+}
+
+function setFollowerCount(n) {
+    const stat = document.getElementById('follower-count');
+    if (!stat) return;
+    stat.innerHTML = `<strong>${n}</strong> ${n === 1 ? 'follower' : 'followers'}`;
+}
+
+async function toggleFollow(button) {
+    if (!await requireLogin('follow people')) return;
+    if (button.disabled) return;
+
+    const wasFollowing = button.getAttribute('aria-pressed') === 'true';
+    const countEl = document.querySelector('#follower-count strong');
+    const before = Number(countEl?.textContent) || 0;
+
+    // Show the result right away…
+    showFollowState(button, !wasFollowing);
+    setFollowerCount(before + (wasFollowing ? -1 : 1));
+    bumpCount(document.querySelector('#follower-count strong'), 0);
+    button.disabled = true;
+
+    try {
+        const result = await api('/api/follow_user.php', { method: 'POST', json: { followed_id: button.dataset.id } });
+        showFollowState(button, result.following);
+        setFollowerCount(result.followers);         // …and correct it with the real total
+        if (result.following) toast.success(`You’re following ${document.querySelector('.user-profile-name')?.textContent.trim()}`);
+    } catch (error) {
+        showFollowState(button, wasFollowing);      // …or put it back
+        setFollowerCount(before);
+        toast.error(error.message || 'Could not update follow');
+    } finally {
+        button.disabled = false;
+    }
+}
+
+async function showPeople(stat, type) {
     const modal = document.getElementById('follower-modal');
     const title = document.getElementById('follower-modal-title');
     const list = document.getElementById('follower-list');
-    const isFollower = event.target.id === 'follower-count';
-    const userId = event.target.dataset.id;
 
-    title.textContent = isFollower ? 'Followers' : 'Following';
-    list.innerHTML = '';
+    title.textContent = type === 'followers' ? 'Followers' : 'Following';
+    list.replaceChildren(Object.assign(document.createElement('p'), { className: 'rv-muted', textContent: 'Loading…' }));
+    modal.classList.remove('hidden');
 
-    fetch(`/api/follow_user.php?user_id=${userId}&type=${isFollower ? 'followers' : 'following'}`)
-        .then(res => res.json())
-        .then(users => {
-            users.forEach(user => {
-                const userElement = document.createElement('div');
-                userElement.className = 'follower-item';
-                userElement.addEventListener('click', () => {
-                    window.location.href = `/user/${encodeURIComponent(user.username)}`;
-                });
-                list.appendChild(userElement);
-                const userimg = document.createElement('img');
-                userimg.src = avatarUrl(user.username, user.image_base);
-                userimg.dataset.fallback = avatarUrl(user.username, user.image_base, '');   // pictures from before the _200 size existed
-                userimg.loading = 'lazy';
-                userimg.alt = `${user.username}'s profile picture`;
-                userimg.className = 'follower-profile-pic';
-                userElement.appendChild(userimg);
-                const usernameElement = document.createElement('span');
-                usernameElement.textContent = user.username;
-                userElement.appendChild(usernameElement);
-            });
-        })
-        .catch(error => {
-            toast.error('Failed to load followers');
-        });
+    let people;
+    try {
+        people = await api('/api/follow_user.php', { query: { user_id: stat.dataset.id, type } });
+    } catch (error) {
+        list.replaceChildren(Object.assign(document.createElement('p'), { className: 'rv-muted', textContent: 'Could not load the list. Try again.' }));
+        return;
+    }
 
-    // modal.classList.remove('hidden');
+    if (!people.length) {
+        list.replaceChildren(Object.assign(document.createElement('p'), {
+            className: 'rv-muted',
+            textContent: type === 'followers' ? 'No followers yet.' : 'Not following anyone yet.',
+        }));
+        return;
+    }
+
+    list.replaceChildren(...people.map(user => {
+        const link = document.createElement('a');
+        link.className = 'follower-item';
+        link.href = `/user/${encodeURIComponent(user.username)}`;
+
+        const img = document.createElement('img');
+        img.className = 'follower-profile-pic';
+        img.src = avatarUrl(user.username, user.image_base);
+        img.dataset.fallback = avatarUrl(user.username, user.image_base, '');   // pictures from before the _200 size existed
+        img.loading = 'lazy';
+        img.alt = '';
+
+        const name = document.createElement('span');
+        name.textContent = user.username;
+
+        link.append(img, name);
+        return link;
+    }));
 }
-
-// export async function loadUser(username) {
-//     setCurrentExpanded('user');
-
-//     const response = await fetch(`/api/fetch_user.php?username=${encodeURIComponent(username)}`, {
-//         method: 'GET'
-//     });
-
-//     const user = await response.json();
-    
-//     if (response.ok) {
-//         userID = user.id;
-
-//         const userProfileModal = document.getElementById('user-profile');
-//         const imgElement = userProfileModal.querySelector('.profile-picture');
-//         const nameElement = userProfileModal.querySelector('.user-profile-name');
-//         const bioElement = userProfileModal.querySelector('.user-profile-bio');
-
-//         nameElement.textContent = user.username;
-//         bioElement.textContent = user.bio || '';
-
-//         if (user.image_base) {
-//             imgElement.src = `/uploads/profile_pictures/${user.image_base}_200.webp`;
-//             imgElement.alt = `${user.username}'s profile picture`;
-//         } else {
-//             imgElement.src = `/uploads/profile_pictures/${user.username}_avatar.svg`;
-//             imgElement.alt = `${user.username}'s default avatar`;
-//         }
-
-//         userProfileModal.classList.remove('hidden');
-
-//         const followButton = document.getElementById('follow-button');
-
-//         if (!user.isSelf) {
-//             followButton.classList.remove('hidden');
-//                         let response = await fetch(`/api/follow_user.php?followed_id=${encodeURIComponent(userID)}`, {
-//                 method: 'GET'
-//             });
-//             const data = await response.json();
-
-//             if (data.is_following) {
-//                 followButton.textContent = 'Unfollow';
-//             } else {
-//                 followButton.textContent = 'Follow';
-//             }
-//         } else {
-//             // TODO show edit buttons for bio and image
-//             followButton.classList.add('hidden');
-//         }
-
-//     } else {
-//         alert(user.error || 'Failed to load user information.');
-//     }
-
-//     window.history.pushState(
-//         {type: 'user', slug: username},
-//         '',
-//         `/user/${username}`
-//     );
-// }
-

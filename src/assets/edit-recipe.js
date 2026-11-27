@@ -2,7 +2,7 @@ import { fillEditList } from './sections.js';
 import { parseJson, fetchRecipeById } from './recipe-data.js'
 import { showLoadedpreview } from './drag-and-drop.js';
 import { toast } from './toast.js';
-import { setRecipeTimes, readSaveResponse } from './add-recipe.js';
+import { setRecipeTimes, readSaveResponse, setFormTags } from './add-recipe.js';
 
 let addForm = null;
 
@@ -18,7 +18,8 @@ const ingredientText = i =>
         .filter(part => part !== null && part !== undefined && part !== '')
         .join(' ');
 
-export async function grabAndDisplayEdit(recipeId) {
+/** Fill the form with a recipe. mode "edit" changes it, "fork" saves a copy as your own. */
+export async function grabAndDisplayEdit(recipeId, mode = 'edit') {
     let recipe;
     try {
         recipe = await fetchRecipeById(recipeId);
@@ -35,9 +36,10 @@ export async function grabAndDisplayEdit(recipeId) {
  
     // Keep the form's id: recipe-data.js, form-router.js and add-recipe.js all look it up by #add-recipe-form
     addForm.dataset.id = recipeId;
-    addForm.querySelector('.form-title').textContent         = 'Edit recipe';
-    addForm.querySelector('.save-recipe-button').textContent = 'Update recipe';
+    addForm.querySelector('.form-title').textContent         = mode === 'fork' ? 'Fork recipe' : 'Edit recipe';
+    addForm.querySelector('.save-recipe-button').textContent = mode === 'fork' ? 'Save my version' : 'Save changes';
     addForm.querySelector('#name').value               = recipe.title ?? '';
+    setFormTags(parseJson(recipe.recipe_tags).map(t => t.name));
     addForm.querySelector('#description').value        = recipe.description ?? '';
     setRecipeTimes(addForm, recipe.prep_time_minutes, Math.max(0, total - prep));
     addForm.querySelector('#servings').value           = recipe.servings ?? '';
@@ -69,8 +71,9 @@ export async function grabAndDisplayEdit(recipeId) {
         parseJson(recipe.recipe_step_sections),
         step => step.content ?? '');
  
-    document.getElementById('expanded-modal').classList.toggle("hidden");
-    document.getElementById('add-menu').classList.toggle("hidden");
+    // Close the recipe view properly (so Back and the cards keep working), then show the form
+    if (history.state?.type === 'recipe') history.back();
+    document.getElementById('add-menu').classList.remove("hidden");
 }
 
 export async function submitEdit(e) {
@@ -86,8 +89,9 @@ export async function submitEdit(e) {
         });
         if (!await readSaveResponse(response, 'Failed to update recipe')) return;   // form stays open to fix
 
-        document.getElementById('add-menu').classList.toggle("hidden");
-        toast.success('Recipe updated successfully');
+        document.getElementById('add-menu').classList.add("hidden");
+        toast.success('Changes saved');
+        document.dispatchEvent(new CustomEvent('recipe:saved', { detail: { id: recipeId, open: true } }));
     } catch (error) {
         toast.error('Could not reach the server. Your changes are still in the form, try again.');
     }

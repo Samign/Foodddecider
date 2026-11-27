@@ -1,10 +1,14 @@
-import { handleEdit } from './edit-recipe.js';
-import { escapeHtml, getRecipeImage, avatarUrl } from './recipe-cards.js';
+// assets/recipe-modal.js
+// The recipe view: opening a recipe (from a card, the pick card, a link or the back button),
+// and everything you can do in it: save, share, fork, edit, delete, tick off ingredients.
 
+import { handleEdit } from './edit-recipe.js';
+import { escapeHtml, getRecipeImage, avatarUrl, getCourseName, formatMinutes } from './recipe-cards.js';
 import { fetchRecipeById, parseJson, groupBySection } from './recipe-data.js';
 import { toast } from './toast.js';
 import { confirmDialog } from './dialog.js';
 import { forkRecipe } from './fork-recipe.js';
+import { api, requireLogin, copyText, bumpCount, plural } from './ui.js';
 
 // Only real web links become clickable: a saved "javascript:..." link would run on click
 function safeHttpUrl(value) {
@@ -17,6 +21,10 @@ function safeHttpUrl(value) {
 }
 
 let overlay, expandedModal, expanded = false;
+let current = null;          // the recipe on screen
+let openToken = 0;           // ignore slow answers for a recipe the user already left
+
+const dialogOpen = () => Boolean(document.querySelector('dialog[open]'));
 
 export function init() {
     overlay = document.getElementById('modal-overlay');
@@ -24,50 +32,88 @@ export function init() {
     if (!expandedModal) return; // page has no modal
 
     document.addEventListener('click', (e) => {
-        const saveButton = e.target.closest('.saves');
+        // Outside the recipe = on the dark backdrop. Clicks in dialogs, toasts or menus opened
+        // from the recipe (like "Add to list") are not "outside" and must not close it.
+        if (expanded) {
+            if (e.target === overlay && !dialogOpen()) history.back();
+            return;
+        }
+        const saveButton = e.target.closest('.recipe-card .saves');
         const card = e.target.closest('.recipe-card');
-        const modal = e.target.closest('#expanded-modal');
-
-        if (expanded && !modal) {
-            history.back();
-        } else if (saveButton) {
-            handleSave(parseInt(saveButton.closest('.recipe-card').dataset.id), saveButton);
+        if (saveButton) {
+            handleSave(parseInt(card.dataset.id));
         } else if (card) {
-            const id = parseInt(card.dataset.id);
-            if (id) { 
-                pushRecipeState(id);
-                expandRecipe(id);
-            }
+            openRecipe(parseInt(card.dataset.id));
         }
     });
 
+    // Cards can be opened with the keyboard too
     document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape' && expanded) history.back();
+        if (e.key === 'Escape' && expanded && !dialogOpen()) history.back();
+        const card = e.target.closest?.('.recipe-card');
+        if (card && !expanded && (e.key === 'Enter' || e.key === ' ') && e.target === card) {
+            e.preventDefault();
+            openRecipe(parseInt(card.dataset.id));
+        }
     });
 
     expandedModal.addEventListener('click', async (e) => {
-        if (e.target.id === 'edit-recipe-button')   await handleEdit(parseInt(e.target.dataset.id));
-        if (e.target.id === 'delete-recipe-button') await handleDelete(parseInt(e.target.dataset.id));
-        if (e.target.classList.contains('close-button'))       window.history.back();
-        if (e.target.classList.contains('save-recipe-button')) await handleSave(parseInt(e.target.dataset.id));
-        if (e.target.classList.contains('ingredient-checkbox')) {
-            e.target.classList.toggle('checked');
-            e.target.innerHTML = e.target.classList.contains('checked') ? 'check_circle' : 'circle';
+        const target = e.target.closest('button, a, .ingredient-item');
+        if (!target || !current) return;
+        const id = current.id;
+
+        if (target.classList.contains('close-button'))   return history.back();
+        if (target.id === 'edit-recipe-button')         return handleEdit(id);
+        if (target.id === 'delete-recipe-button')       return handleDelete(id);
+        if (target.classList.contains('rv-save'))       return handleSave(id);
+        if (target.classList.contains('rv-share'))      return shareRecipe(current);
+        if (target.id === 'fork-recipe-button') {
+            if (await requireLogin('fork recipes and make your own version')) forkRecipe(id);
+            return;
         }
-        if (e.target.id === 'fork-recipe-button') {
-            const recipeId = parseInt(e.target.dataset.id);
-            await forkRecipe(recipeId);
+        if (target.classList.contains('forked-from-link')) {
+            e.preventDefault();
+            return openRecipe(parseInt(target.dataset.id));
+        }
+        // Tap an ingredient to tick it off (the + button adds it to the shopping list instead)
+        if (target.classList.contains('ingredient-item')) toggleIngredient(target);
+    });
+
+    expandedModal.addEventListener('keydown', (e) => {
+        const item = e.target.closest('.ingredient-item');
+        if (item && (e.key === 'Enter' || e.key === ' ') && e.target === item) {
+            e.preventDefault();
+            toggleIngredient(item);
         }
     });
 
-    // direct link: /recipe/42
+    // After adding, editing or forking: show the result
+    document.addEventListener('recipe:saved', (e) => {
+        if (e.detail?.open && e.detail.id) openRecipe(e.detail.id);
+    });
+
+    // Direct link: /recipe/42
     const match = location.pathname.match(/\/recipe\/(\d+)/);
     if (match) {
         history.replaceState({ type: 'home' }, '', '/');
-        const id = parseInt(match[1]);
-        pushRecipeState(id);
-        expandRecipe(id);
+        openRecipe(parseInt(match[1]));
     }
+}
+
+/** Open a recipe and add it to the browser history, so Back closes it. */
+export function openRecipe(id) {
+    if (!id) return;
+    if (expanded) history.replaceState({ type: 'recipe', slug: id }, '', `/recipe/${id}`);   // recipe -> recipe: one Back
+    else pushRecipeState(id);
+    expandRecipe(id);
+}
+
+function toggleIngredient(item) {
+    const on = item.getAttribute('aria-pressed') !== 'true';
+    item.setAttribute('aria-pressed', String(on));
+    const icon = item.querySelector('.ingredient-checkbox');
+    icon.classList.toggle('checked', on);
+    icon.textContent = on ? 'check_circle' : 'circle';
 }
 
 function formatMacro(value) {
@@ -131,6 +177,14 @@ function renderMacroWheel(macrosContainer, ingredientMacrosJson, servings = 1) {
         t.fat      += macro.fat_per_100g      * f;
         return t;
     }, { calories: 0, protein: 0, carbs: 0, fat: 0 });
+
+    // Nothing matched the nutrition database: say so instead of drawing a ring of zeros
+    const section = macrosContainer.closest('.macros');
+    if (!included.length) {
+        macrosContainer.innerHTML = '<p class="rv-muted">No nutrition data for these ingredients yet.</p>';
+        return null;   // no "?" on every ingredient either: the note above already says it
+    }
+    section?.removeAttribute('hidden');
 
     const protKcal  = totals.protein * 4;
     const carbKcal  = totals.carbs   * 4;
@@ -197,6 +251,7 @@ function renderMacroWheel(macrosContainer, ingredientMacrosJson, servings = 1) {
     };
 }
 
+
 export function pushRecipeState(id) {
     history.pushState({ type: 'recipe', slug: id }, '', `/recipe/${id}`);
 }
@@ -205,40 +260,40 @@ function renderIngredients(ingredientsEl, recipeIngredients, recipeSections, cov
     const ingredients = parseJson(recipeIngredients);
 
     if (!ingredients.length) {
-        ingredientsEl.innerHTML = '<p>No ingredients listed.</p>';
+        ingredientsEl.innerHTML = '<p class="rv-muted">No ingredients listed.</p>';
         return;
     }
 
     const groups = groupBySection(ingredients, parseJson(recipeSections));
 
     ingredientsEl.innerHTML = renderGrouped(groups, ingredient => {
-        const amount = ingredient.amount ?? '';
+        const amount = ingredient.amount != null ? formatAmount(ingredient.amount) + ' ' : '';
         const unit   = ingredient.unit ? ingredient.unit + ' ' : '';
         const size   = ingredient.size ? ingredient.size + ' ' : '';
         const name   = ingredient.name;   // raw name for the coverage lookup
 
         let badge = '';
-        if (coverage) {
-            if (coverage.included.has(name)) {
-                badge = `<span class="ingredient-macro-badge included" title="Included in calorie calculation">
-                            <span class="material-symbols-outlined">fitness_center</span>
-                         </span>`;
-            } else if (coverage.skipped.has(name)) {
-                badge = `<span class="ingredient-macro-badge skipped" title="No nutrition data available">
-                            <span class="material-symbols-outlined">question_mark</span>
-                         </span>`;
-            }
+        if (coverage?.skipped.has(name)) {
+            badge = `<span class="ingredient-macro-badge skipped" title="Not counted in the nutrition (no data)">
+                        <span class="material-symbols-outlined">question_mark</span>
+                     </span>`;
         }
 
-        return `<div class="ingredient-item">
-            <span class="material-symbols-outlined ingredient-checkbox">circle</span>
-            <p>${escapeHtml(amount)} ${escapeHtml(unit)}${escapeHtml(size)}${escapeHtml(name)}</p>
+        return `<div class="ingredient-item" role="button" tabindex="0" aria-pressed="false">
+            <span class="material-symbols-outlined ingredient-checkbox" aria-hidden="true">circle</span>
+            <p>${escapeHtml(amount)}${escapeHtml(unit)}${escapeHtml(size)}${escapeHtml(name)}</p>
             ${badge}
-            <button class="ingredient-add-button" title="Add to shopping list" aria-label="Add to shopping list">
+            <button type="button" class="ingredient-add-button" title="Add to shopping list" aria-label="Add ${escapeHtml(name)} to shopping list">
                 <span class="material-symbols-outlined">add</span>
             </button>
         </div>`;
     });
+}
+
+// 0.5 -> "0.5", 2 -> "2", 0.333333 -> "0.33"
+function formatAmount(value) {
+    const n = Number(value);
+    return Number.isFinite(n) ? String(Math.round(n * 100) / 100) : String(value);
 }
 
 function renderGrouped(groups, renderItem) {
@@ -254,7 +309,7 @@ function renderSteps(stepsEl, recipe) {
     const steps = parseJson(recipe.recipe_steps);
 
     if (!steps.length) {
-        stepsEl.innerHTML = '<p>No instructions listed.</p>';
+        stepsEl.innerHTML = '<p class="rv-muted">No steps listed.</p>';
         return;
     }
 
@@ -262,145 +317,185 @@ function renderSteps(stepsEl, recipe) {
 
     stepsEl.innerHTML = renderGrouped(groups, step => {
         const n = String(step.step_number).padStart(2, '0');
-        return `<div class="flex">
-            <div class="instruction-number-expanded">${n}</div>
+        return `<div class="flex rv-step">
+            <div class="instruction-number-expanded">${escapeHtml(n)}</div>
             <p class="instruction-text">${escapeHtml(step.content)}</p>
         </div>`;
     });
 }
 
-export async function expandRecipe(recipeId) {
-    expanded = true;
+// ── Header: who made it, numbers, buttons ────────────────────────────────────
 
-    const id = recipeId;
-    let recipe = await fetchRecipeById(recipeId);
-    
-    document.title = `${recipe.title} - food decider`;
+function renderHeader(recipe) {
+    const q = sel => expandedModal.querySelector(sel);
 
-    // Grab all the DOM targets once
-    const ingredientsEl  = expandedModal.querySelector('.ingredient-list');
-    const macrosContainer = expandedModal.querySelector('.macro-list');
-    const image          = expandedModal.querySelector('.expanded-recipe-image');
-    const views          = expandedModal.querySelector('.views');
-    const recipeActions  = expandedModal.querySelector('.recipe-actions');
-    const title          = expandedModal.querySelector('.recipe-title');
-    const description    = expandedModal.querySelector('.recipe-description');
-    const steps          = expandedModal.querySelector('.steps');
-    const time           = expandedModal.querySelector('.recipe-time');
-    const tags           = expandedModal.querySelector('.recipe-tags');
-    const recipeOwner    = expandedModal.querySelector('.recipe-owner');
-    const courseText     = expandedModal.querySelector('.course-type');
-    // const servings       = expandedModal.querySelector('.ingredient-servings');
-
-    // Render macro wheel first so we get coverage back
-    const coverage = renderMacroWheel(macrosContainer, recipe.ingredient_macros, recipe.servings);
-
-    // Render ingredients with coverage badges
-    renderIngredients(ingredientsEl, recipe.recipe_ingredients, recipe.recipe_ingredient_sections, coverage);
-
-    // servings.textContent = recipe.servings ? `${recipe.servings} servings` : '';
-
-    console.log('courseTypes', window.metadata.courseTypes);
-
-    courseText.textContent = window.metadata.courseTypes.get(recipe.course_types).name;
-
-    recipeOwner.innerHTML = `
+    q('.recipe-owner').innerHTML = `
         <a class="recipe-userinfo" href="/user/${encodeURIComponent(recipe.owner_username)}">
-            <img class="owner-profile-pic"
-                src="${avatarUrl(recipe.owner_username, recipe.owner_image)}"
-                data-fallback="${avatarUrl(recipe.owner_username, recipe.owner_image, '')}"
-                alt="">
-            <div>
-                <h4>Archived by</h4>
-                <h4 class="recipe-owner-username">${escapeHtml(recipe.owner_username)}</h4>
-            </div>
-    </a>`;
+            <img class="owner-profile-pic" src="${avatarUrl(recipe.owner_username, recipe.owner_image)}"
+                 data-fallback="${avatarUrl(recipe.owner_username, recipe.owner_image, '')}" alt="">
+            <span>by <strong class="recipe-owner-username">${escapeHtml(recipe.owner_username)}</strong></span>
+        </a>`;
 
-    // Tag names are typed by users: escape them
-    tags.innerHTML = parseJson(recipe.recipe_tags).map(t =>
+    q('.recipe-title').textContent = recipe.title;
+    q('.recipe-description').textContent = recipe.description || '';
+
+    // Forked from another recipe: link to it (only sent when the original still exists and is visible)
+    const forked = q('.recipe-forked-from');
+    forked.hidden = !recipe.forked_from_id;
+    forked.innerHTML = recipe.forked_from_id
+        ? `<span class="material-symbols-outlined" aria-hidden="true">call_split</span>
+           Forked from <a href="/recipe/${Number(recipe.forked_from_id)}" class="forked-from-link" data-id="${Number(recipe.forked_from_id)}">${escapeHtml(recipe.forked_from_title)}</a>
+           ${recipe.forked_from_username ? `by ${escapeHtml(recipe.forked_from_username)}` : ''}`
+        : '';
+
+    const course = getCourseName(recipe);
+    q('.course-type').textContent = course ? course[0].toUpperCase() + course.slice(1) : '';
+    q('.views').textContent = plural(Number(recipe.view_count) || 0, 'view');
+    q('.views').dataset.count = Number(recipe.view_count) || 0;
+    q('.rv-saves').textContent = plural(Number(recipe.saves) || 0, 'save');
+    q('.rv-saves').dataset.count = Number(recipe.saves) || 0;
+    const forks = Number(recipe.fork_count) || 0;
+    q('.rv-forks').textContent = forks ? plural(forks, 'fork') : '';
+    q('.rv-forks').hidden = !forks;
+
+    const hasPrep = Number(recipe.prep_time_minutes) > 0;
+    const servings = Number(recipe.servings) || 0;
+    q('.recipe-time').innerHTML = `
+        ${hasPrep ? `<div class="recipe-time-section"><h5>Prep</h5><span>${formatMinutes(recipe.prep_time_minutes)}</span></div>` : ''}
+        <div class="recipe-time-section"><h5>${hasPrep ? 'Total' : 'Time'}</h5><span>${formatMinutes(recipe.total_time_minutes)}</span></div>
+        ${servings ? `<div class="recipe-time-section"><h5>Serves</h5><span>${servings}</span></div>` : ''}`;
+
+    q('.recipe-tags').innerHTML = parseJson(recipe.recipe_tags).map(t =>
         `<a href="/results?q=${encodeURIComponent(t.name)}" class="pill">${escapeHtml(t.name)}</a>`).join('');
 
-    // Prep is optional (see the "Split into prep and cook" switch): only show it when it was given
-    const hasPrep = recipe.prep_time_minutes != null && Number(recipe.prep_time_minutes) > 0;
-    time.innerHTML = `
-        ${hasPrep ? `<div class="recipe-time-section">
-            <h5>PREP TIME</h5>
-            <span>${Number(recipe.prep_time_minutes)} Mins</span>
-        </div>
-        <span class="divider"></span>` : ''}
-        <div class="recipe-time-section">
-            <h5>TOTAL TIME</h5>
-            <span>${Number(recipe.total_time_minutes) || 0} Mins</span>
-        </div>
-        <span class="divider"></span>
-        <div class="recipe-time-section">
-            <h5>SERVINGS</h5>
-            <span>${Number(recipe.servings) > 1 ? Number(recipe.servings) + ' Servings' : '1 Serving'}</span>
-        </div>
-    `;
-        
+    const link = safeHttpUrl(recipe.link);
+    const share = `<button type="button" class="btn rv-share"><span class="material-symbols-outlined" aria-hidden="true">share</span>Share</button>`;
+    q('.recipe-actions').innerHTML = recipe.is_owner
+        ? `<button type="button" class="btn p" id="edit-recipe-button"><span class="material-symbols-outlined" aria-hidden="true">edit</span>Edit</button>
+           ${share}
+           <button type="button" class="btn danger-quiet" id="delete-recipe-button"><span class="material-symbols-outlined" aria-hidden="true">delete</span>Delete</button>`
+        : `${saveButtonHtml(recipe.is_saved)}
+           ${share}
+           <button type="button" class="btn" id="fork-recipe-button"><span class="material-symbols-outlined" aria-hidden="true">call_split</span>Fork</button>
+           ${link ? `<a href="${escapeHtml(link)}" target="_blank" rel="noopener noreferrer nofollow" class="btn">
+               <span class="material-symbols-outlined" aria-hidden="true">open_in_new</span>Original</a>` : ''}`;
+}
 
-    title.textContent       = recipe.title;
-    description.textContent = recipe.description;
-    image.innerHTML         = getRecipeImage(recipe);
-    views.innerHTML         = `<span class="material-symbols-outlined">visibility</span><p>${Number(recipe.view_count) || 0} views</p>`;
+function saveButtonHtml(saved) {
+    return `<button type="button" class="btn p rv-save" aria-pressed="${saved}">
+        <span class="material-symbols-outlined" aria-hidden="true">bookmark</span>${saved ? 'Saved' : 'Save'}</button>`;
+}
 
-    renderSteps(steps, recipe);
+// ── Opening and closing ──────────────────────────────────────────────────────
 
-    recipeActions.innerHTML = recipe.is_owner
-        ? `<button class="recipe-action-button" id="edit-recipe-button" data-id="${id}">Edit Recipe</button>
-           <button class="recipe-action-button" id="delete-recipe-button" data-id="${id}">Delete Recipe</button>`
-        : `<button class="add-button ${recipe.is_saved ? 'filled' : ''}" data-id="${id}">
-               <span class="material-symbols-outlined">bookmark</span>
-               ${recipe.is_saved ? 'Remove from favorites' : 'Save to Favorites'}
-           </button>
-           ${safeHttpUrl(recipe.link) ? `<a href="${escapeHtml(safeHttpUrl(recipe.link))}" target="_blank" rel="noopener noreferrer nofollow" class="external-link-button">
-               <span class="material-symbols-outlined">open_in_new</span>Open Recipe External Link
-           </a>` : ''}
-           <button class="recipe-action-button" id="fork-recipe-button" data-id="${id}">
-               <span class="material-symbols-outlined">call_split</span> Fork Recipe
-           </button>
-           `;
-
-    expandedModal.classList.remove("hidden");
+export async function expandRecipe(recipeId) {
+    if (!expandedModal) return;   // page without a recipe view
+    const token = ++openToken;
+    expanded = true;
+    expandedModal.classList.add('is-loading');
+    expandedModal.classList.remove('hidden');
     overlay.classList.remove('hidden');
 
-    fetch('/api/recipes/register_view.php', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ recipe_id: id })
-    });
+    let recipe;
+    try {
+        recipe = await fetchRecipeById(recipeId);
+        if (!recipe) throw new Error('This recipe doesn’t exist any more, or it’s private.');
+    } catch (error) {
+        if (token !== openToken) return;
+        toast.error(error.message || 'Could not open the recipe');
+        if (history.state?.type === 'recipe') history.back(); else closeRecipe();
+        return;
+    }
+    if (token !== openToken) return;   // the user opened another recipe or closed this one meanwhile
+
+    current = recipe;
+    document.title = `${recipe.title} - FoodDecider`;
+
+    expandedModal.querySelector('.macros').hidden = false;
+    const coverage = renderMacroWheel(expandedModal.querySelector('.macro-list'), recipe.ingredient_macros, recipe.servings);
+    renderIngredients(expandedModal.querySelector('.ingredient-list'), recipe.recipe_ingredients, recipe.recipe_ingredient_sections, coverage);
+    renderSteps(expandedModal.querySelector('.steps'), recipe);
+    renderHeader(recipe);
+    expandedModal.querySelector('.expanded-recipe-image').innerHTML = getRecipeImage(recipe);
+
+    expandedModal.classList.remove('is-loading');
+    expandedModal.scrollTop = 0;
+    expandedModal.querySelector('.close-button')?.focus({ preventScroll: true });
+
+    // Count the view, and show it right away when it counted (once per person)
+    api('/api/recipes/register_view.php', { method: 'POST', json: { recipe_id: recipe.id } })
+        .then(result => {
+            if (result.counted && current?.id === recipe.id) {
+                bumpCount(expandedModal.querySelector('.views'), 1, { format: n => plural(n, 'view') });
+            }
+        })
+        .catch(() => { /* a missed view count isn't worth bothering anyone about */ });
 }
 
 export function closeRecipe() {
+    if (!expandedModal) return;
+    openToken++;
     expanded = false;
-    expandedModal.classList.add("hidden");
-    overlay.classList.add('hidden');
-    document.title = 'Recipes - food decider';
+    current = null;
+    expandedModal.classList.add('hidden');
+    if (document.getElementById('login-modal')?.classList.contains('hidden') !== false) overlay.classList.add('hidden');
+    document.title = 'FoodDecider';
+}
+
+// ── Actions ──────────────────────────────────────────────────────────────────
+
+async function shareRecipe(recipe) {
+    const url = `${location.origin}/recipe/${recipe.id}`;
+    if (await copyText(url)) toast.success('Link copied. Paste it anywhere to share the recipe.');
+    else toast.error('Could not copy. The link is ' + url);
 }
 
 async function handleDelete(recipeId) {
-    if (!await confirmDialog({ title: 'Delete recipe', message: `Delete the recipe and everything on it? This can't be undone.` })) return;
+    if (!await confirmDialog({ title: 'Delete recipe', message: 'Delete the recipe and everything on it? This can’t be undone.', confirmText: 'Delete', danger: true })) return;
 
-    const response = await fetch(`/api/recipes/delete_recipe.php?recipe_id=${recipeId}`);
-    const result   = await response.json();
-
-    if (result.success) {
-        document.querySelector(`.recipe-card[data-id="${recipeId}"]`)?.remove();
-        history.back();
-        closeRecipe();
-    } else {
-        toast.error('Failed to delete recipe');
+    try {
+        await api('/api/recipes/delete_recipe.php', { query: { recipe_id: recipeId } });
+    } catch (error) {
+        toast.error(error.message || 'Could not delete the recipe');
+        return;
     }
+    toast.success('Recipe deleted');
+    document.dispatchEvent(new CustomEvent('recipe:deleted', { detail: { id: recipeId } }));
+    history.back();
 }
 
-export async function handleSave(recipeId, element) {
-    element?.classList.toggle('filled');
-    const response = await fetch('/api/recipes/save_recipe.php', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ recipe_id: recipeId })
-    });
-    const data = await response.json();
-    toast.success(data.status === 'saved' ? 'Recipe saved!' : 'Recipe removed from favorites.');
+/**
+ * Save / unsave, from a card's bookmark or the recipe view. Everything on screen changes at once;
+ * if the server says no, it all goes back and the reason is shown.
+ */
+export async function handleSave(recipeId) {
+    if (!await requireLogin('save recipes to your kitchen')) return;
+
+    const cards = [...document.querySelectorAll(`.recipe-card[data-id="${recipeId}"] .saves`)];
+    const viewButton = () => current?.id === recipeId ? expandedModal.querySelector('.rv-save') : null;
+    const counter = current?.id === recipeId ? expandedModal.querySelector('.rv-saves') : null;
+    const wasSaved = viewButton() ? viewButton().getAttribute('aria-pressed') === 'true'
+                                  : cards[0]?.classList.contains('filled') ?? false;
+
+    const show = (saved) => {
+        cards.forEach(c => {
+            c.classList.toggle('filled', saved);
+            c.setAttribute('aria-pressed', String(saved));
+        });
+        viewButton()?.replaceWith(Object.assign(document.createElement('template'), { innerHTML: saveButtonHtml(saved) }).content);
+    };
+
+    show(!wasSaved);
+    bumpCount(counter, wasSaved ? -1 : 1, { format: n => plural(n, 'save') });
+
+    try {
+        const result = await api('/api/recipes/save_recipe.php', { method: 'POST', json: { recipe_id: recipeId } });
+        show(result.saved);                                     // the server's answer wins
+        if (counter && result.saves != null) counter.textContent = plural(result.saves, 'save');
+        toast.success(result.saved ? 'Saved to your kitchen' : 'Removed from your kitchen');
+    } catch (error) {
+        show(wasSaved);
+        bumpCount(counter, wasSaved ? 1 : -1, { format: n => plural(n, 'save') });
+        toast.error(error.message || 'Could not save the recipe');
+    }
 }

@@ -38,7 +38,6 @@ function renderRecipeMetaData(metadata) {
 
     const courseTypes = metadata.courseTypes || [];
 
-    console.log("course dropdown", courseDropdown);
 
     if (courseDropdown.length > 0) {
         courseTypes.forEach(tag => {

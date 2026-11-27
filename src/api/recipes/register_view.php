@@ -34,7 +34,8 @@ try {
         ':session_id' => $session_id
     ]);
 
-    if ($stmt->fetch()) {
+    $counted = (bool)$stmt->fetch();
+    if ($counted) {
         $update_stmt = $db->prepare("
             UPDATE recipes 
             SET view_count = view_count + 1 
@@ -44,8 +45,11 @@ try {
     }
 
     $db->commit();
+    echo json_encode(['success' => true, 'counted' => $counted]);   // the page adds 1 to the views it shows
 
 } catch (Exception $e) {
     $db->rollBack();
-    throw $e;
+    error_log('register_view: ' . $e->getMessage());
+    http_response_code(500);
+    echo json_encode(['success' => false, 'error' => 'Could not count the view']);
 }

@@ -52,6 +52,7 @@ export function init() {
 
         const items = list.querySelectorAll(".autocomplete-item");
         const active = list.querySelector(".autocomplete-item.active");
+        if (!items.length) return;   // nothing showing: the arrows move between rows (sections.js)
 
         if (e.key === "ArrowDown") {
             e.preventDefault();

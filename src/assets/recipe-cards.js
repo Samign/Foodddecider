@@ -75,7 +75,7 @@ export function getRecipeHtml(recipe) {
     const ownerFull = avatarUrl(recipe.owner_username, recipe.owner_image, '');
 
     return `
-        <div class="recipe-card" data-id="${Number(recipe.id)}" data-course="${escapeHtml(course)}">
+        <div class="recipe-card" data-id="${Number(recipe.id)}" data-course="${escapeHtml(course)}" tabindex="0" aria-label="${escapeHtml(recipe.title)}">
             ${recipe.is_owner ? '' : `<img class="owner-image" src="${ownerAvatar}" data-fallback="${ownerFull}" alt="${escapeHtml(recipe.owner_username)}" title="by ${escapeHtml(recipe.owner_username)}" loading="lazy">`}
             <div class="recipe-image-container">${getRecipeImage(recipe, '_600')}</div>
             <div class="recipe-content">
@@ -84,7 +84,7 @@ export function getRecipeHtml(recipe) {
                     <span>${escapeHtml(capitalize(course))}</span>
                 </div>
                 <h3>${escapeHtml(recipe.title)}</h3>
-                ${recipe.is_owner ? '' : `<div class="saves ${recipe.is_saved ? 'filled' : ''}"><span class="material-symbols-outlined bookmark-icon">bookmark</span></div>`}
+                ${recipe.is_owner ? '' : `<button type="button" class="saves ${recipe.is_saved ? 'filled' : ''}" aria-pressed="${Boolean(recipe.is_saved)}" aria-label="Save ${escapeHtml(recipe.title)}" title="Save"><span class="material-symbols-outlined bookmark-icon">bookmark</span></button>`}
                 ${getMatchHtml(recipe)}
                 ${getTagsHtml(recipe)}
             </div>

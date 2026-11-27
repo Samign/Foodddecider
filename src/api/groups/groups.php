@@ -8,7 +8,7 @@ $method = $_SERVER['REQUEST_METHOD'];
 if ($method === 'GET') {
     try {
         $db = db();
-        $stmt = $db->prepare("SELECT g.id, g.group_name FROM groups g INNER JOIN group_members gm ON g.id = gm.group_id WHERE gm.member_id = :member_id");
+        $stmt = $db->prepare("SELECT g.id, g.group_name, (SELECT COUNT(*) FROM group_members m WHERE m.group_id = g.id) AS member_count FROM groups g INNER JOIN group_members gm ON g.id = gm.group_id WHERE gm.member_id = :member_id ORDER BY g.group_name");
         $stmt->execute([':member_id' => $_SESSION['user_id']]);
         $groups = $stmt->fetchAll(PDO::FETCH_ASSOC);
 

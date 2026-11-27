@@ -9,6 +9,15 @@ require_once __DIR__ . '/../../includes/helpers/recipe_helper.php';
 
 $input = fetchRecipeInput();
 
+/** The recipe being forked, if it exists and this user may see it (otherwise no link is stored). */
+function forkableRecipeId($id): ?int {
+    $id = filter_var($id, FILTER_VALIDATE_INT);
+    if (!$id) return null;
+    $stmt = db()->prepare("SELECT id FROM recipes WHERE id = :id AND (is_public = '1' OR owner_id = :user)");
+    $stmt->execute([':id' => $id, ':user' => $_SESSION['user_id']]);
+    return $stmt->fetchColumn() ? $id : null;
+}
+
 // Too big for PHP: every field arrived empty, so there is nothing to save. Say why.
 if ($tooLarge = requestTooLargeMessage()) {
     http_response_code(413);
@@ -37,7 +46,7 @@ $recipeId = addRecipe([
     'servings' => $input['servings'],
     'step_sections' => $input['steps'] ?? [],
     'ingredient_sections' => $input['ingredients'] ?? [],
-    'forked_from_recipe_id' => $input['forked_from_recipe_id'] ?? null,
+    'forked_from_recipe_id' => forkableRecipeId($input['forked_from_recipe_id'] ?? null),
     'tags' => $input['tags'] ?? []
 ]);
 

@@ -65,20 +65,29 @@ function getNavBar()
                 <?php endif; ?>
             </div>
         <?php else: ?>
-            <button type="button" class="add" id="add-button" hidden>+ Add recipe</button>
+            <button type="button" class="add hm" id="add-button">+ Add recipe</button>   <!-- asks visitors to log in (landing-page.js) -->
             <button type="button" id="log-in" class="add">Sign up / Log in</button>
         <?php endif; ?>
     </header>
     
     <?php if ($user): ?>
-    <div class="modal hidden" id="social-modal">
-        <div>
-            <span class="close-button">&times;</span>
-            <h2>Groups</h2>
+    <div class="modal hidden" id="social-modal" role="dialog" aria-modal="true" aria-labelledby="groups-title">
+        <button type="button" class="close-button" aria-label="Close">&times;</button>
+        <div class="dlg">
+            <h2 id="groups-title">Groups</h2>
+            <p class="rv-muted">Groups share shopping lists. Invite the people you cook and shop with.</p>
             <div class="social-content" id="social-content">
-                <div class="group-invitations" id="group-invitations"></div>
-                <div class="group-list" id="group-list"></div>
-                <button class="create-group">Create new group</button>
+                <section class="group-section" id="invitations-section" hidden>
+                    <h3>Invitations</h3>
+                    <div class="group-invitations" id="group-invitations"></div>
+                </section>
+                <section class="group-section">
+                    <h3>Your groups</h3>
+                    <div class="group-list" id="group-list"></div>
+                </section>
+                <button type="button" class="btn p create-group">
+                    <span class="material-symbols-outlined" aria-hidden="true">group_add</span>Create a group
+                </button>
             </div>
         </div>
     </div>
@@ -103,14 +112,26 @@ function getNavBar()
         </div>
     </div>
 
-    <div class="modal hidden" id="shopping-list-modal">
-        <div>
-            <span class="close-button" aria-label="Close">&times;</span>
-            <h2>Shopping List</h2>
-            <button type="button" id="share-list-button" hidden>Share with group</button>
+    <div class="modal hidden" id="shopping-list-modal" role="dialog" aria-modal="true" aria-labelledby="sl-title">
+        <button type="button" class="close-button" aria-label="Close">&times;</button>
+        <div class="dlg sl-wrap">
+            <div class="sl-head">
+                <h2 class="sl-title" id="sl-title" tabindex="0">Shopping list</h2>
+                <button type="button" class="icon-btn sl-rename" aria-label="Rename this list" title="Rename" hidden>
+                    <span class="material-symbols-outlined" aria-hidden="true">edit</span>
+                </button>
+            </div>
+            <div class="sl-toolbar">
+                <select name="lists" id="lists" aria-label="Switch shopping list"></select>
+                <button type="button" class="btn" id="share-list-button" hidden>
+                    <span class="material-symbols-outlined" aria-hidden="true">group</span>Share
+                </button>
+                <button type="button" class="btn danger-quiet delete-list-button" hidden>
+                    <span class="material-symbols-outlined" aria-hidden="true">delete</span>Delete
+                </button>
+            </div>
             <div class="share-panel" hidden></div>
-            <select name="lists" id="lists" aria-label="Shopping list"></select>
-            <button type="button" class="delete-list-button" hidden>Delete list</button>
+            <p class="sl-hint">Hold an item (or the list name) to edit it. Tick items as they go in the basket.</p>
 
             <div class="shopping-list-content" id="shopping-list-content">
                 <form id="shopping-list-form">
@@ -118,7 +139,7 @@ function getNavBar()
                     <div class="shopping-rows"></div>
 
                     <details class="shopping-archive" hidden>
-                        <summary>Archive (<span class="archive-count">0</span>), items are removed after 2 days</summary>
+                        <summary>In the basket (<span class="archive-count">0</span>), cleared after 2 days</summary>
                         <div class="shopping-archive-rows"></div>
                     </details>
 
@@ -270,33 +291,42 @@ function getEmptyStateTemplate()
 function getExpandedModal()
 {
     ?>
-    <!-- Same class hooks as before so existing JS still fills it; new layout: ingredients stay on the left while you scroll the steps -->
-    <div class="modal hidden" id="expanded-modal">
-        <span class="close-button">&times;</span>
+    <!-- Recipe view. assets/recipe-modal.js fills it; ingredients stay in view while the steps scroll. -->
+    <div class="modal hidden" id="expanded-modal" role="dialog" aria-modal="true" aria-labelledby="recipe-view-title">
+        <button type="button" class="close-button" aria-label="Close">&times;</button>
         <div class="dlg rv">
             <div class="rvh">
                 <div class="expanded-recipe-image"></div>
-                <div>
+                <div class="rv-info">
                     <div class="recipe-owner"></div>
-                    <h2 class="recipe-title"></h2>
+                    <h2 class="recipe-title" id="recipe-view-title"></h2>
+                    <p class="recipe-forked-from" hidden></p>
                     <div class="recipe-description"></div>
+                    <div class="rv-stats">
+                        <span class="course"><span class="course-type"></span></span>
+                        <span class="views"></span>
+                        <span class="rv-saves"></span>
+                        <span class="rv-forks"></span>
+                    </div>
                     <div class="recipe-meta"><div class="recipe-time"></div></div>
-                    <div class="views"></div>
-                    <div class="course"><span class="course-type">Dinner</span></div>
-                    <div class="recipe-tags"></div>
-                    <div class="macros"><h5>Nutrition Information</h5><div class="macro-list"></div></div>
                     <div class="recipe-actions"></div>
+                    <div class="recipe-tags"></div>
                 </div>
             </div>
             <div class="rvb">
                 <aside class="ingredients">
                     <div class="flex">
                         <h3>Ingredients</h3>
-                        <button class="add-all-button">Add all to list</button>
+                        <button type="button" class="add-all-button">Add to list</button>
                     </div>
+                    <p class="rv-hint">Tap an ingredient to tick it off while you cook.</p>
                     <div class="ingredient-list"></div>
+                    <div class="macros">
+                        <h3>Nutrition <small>per serving</small></h3>
+                        <div class="macro-list"></div>
+                    </div>
                 </aside>
-                <div>
+                <div class="rv-steps">
                     <h3>Steps</h3>
                     <div class="steps"></div>
                 </div>
@@ -326,32 +356,46 @@ function getExpandedModal()
 function getLoginModal()
 {
     ?>
-    <div id="login-modal" class="modal hidden">
-        <div class="modal-content">
-            <span class="close-button">x</span>
-            <!-- TODO add a option to display signup under login content -->
-            <h2>Login or Sign Up</h2>
-            <a href="/auth/google.php">Sign in with Google</a>
-            <form id="signup-form">
-                <label for="email">email</label>
-                <input autocomplete="email" id="email" type="text" name="email">
-                <label for="username">username</label>
-                <input autocomplete="username" id="username" type="text" name="username">
-                <label for="password">password</label>
-                <input id="password" type="password" name="password">
-                <label for="picture">Profile Picture</label>
-                <input id="picture" type="file" name="picture" accept="image/jpeg,image/png,image/webp,image/gif"
-                       <?= imageRulesAttributes() ?> aria-describedby="signup-photo-message">
-                <p class="photo-message" id="signup-photo-message" role="alert" hidden></p>
-                <button type="submit">Create account</button>
+    <div id="login-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="login-title">
+        <button type="button" class="close-button" aria-label="Close">&times;</button>
+        <div class="dlg auth">
+            <h2 id="login-title">Welcome to FoodDecider</h2>
+            <p class="auth-lead">Save recipes, write your own, and share shopping lists with the people you cook with.</p>
+
+            <div class="seg auth-tabs" role="tablist">
+                <button type="button" role="tab" class="selected" aria-selected="true" data-tab="login">Log in</button>
+                <button type="button" role="tab" aria-selected="false" data-tab="signup">Sign up</button>
+            </div>
+
+            <form id="login-form" method="POST" action="/auth/login.php" class="fm" data-tab-panel="login">
+                <div><label class="l" for="login-user">Email or username</label>
+                    <input class="in-t" id="login-user" type="text" name="user" autocomplete="username" required></div>
+                <div><label class="l" for="login-password">Password</label>
+                    <input class="in-t" id="login-password" type="password" name="password" autocomplete="current-password" required></div>
+                <p class="form-error" role="alert" hidden></p>
+                <button type="submit" class="btn p">Log in</button>
             </form>
-            <form method="POST" action="/auth/login.php">
-                <label for="user">email or username</label>
-                <input type="text" name="user">
-                <label for="password">password</label>
-                <input type="password" name="password">
-                <button type="submit">log in</button>
+
+            <form id="signup-form" class="fm" data-tab-panel="signup" hidden>
+                <div><label class="l" for="email">Email</label>
+                    <input class="in-t" autocomplete="email" id="email" type="email" name="email" required></div>
+                <div><label class="l" for="username">Username</label>
+                    <input class="in-t" autocomplete="username" id="username" type="text" name="username" required
+                           minlength="3" maxlength="30" pattern="[A-Za-z0-9][A-Za-z0-9_.\-]{2,29}"
+                           title="3-30 letters, numbers, dots, dashes or underscores"></div>
+                <div><label class="l" for="password">Password</label>
+                    <input class="in-t" id="password" type="password" name="password" autocomplete="new-password" required minlength="8">
+                    <small class="field-hint">At least 8 characters</small></div>
+                <div><label class="l" for="picture">Profile picture <small>(optional)</small></label>
+                    <input id="picture" type="file" name="picture" accept="image/jpeg,image/png,image/webp,image/gif"
+                           <?= imageRulesAttributes() ?> aria-describedby="signup-photo-message">
+                    <p class="photo-message" id="signup-photo-message" role="alert" hidden></p></div>
+                <p class="form-error" role="alert" hidden></p>
+                <button type="submit" class="btn p">Create account</button>
             </form>
+
+            <div class="auth-or"><span>or</span></div>
+            <a class="btn auth-google" href="/auth/google.php">Continue with Google</a>
         </div>
     </div>
     <?php

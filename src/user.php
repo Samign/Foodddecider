@@ -5,25 +5,18 @@ require_once __DIR__ . '/includes/follow_check.php';
 require_once __DIR__ . '/includes/modules.php';
 
 $user = null;
-$requestUri = $_SERVER['REQUEST_URI'];
-$requestUri = trim($requestUri, '/');
+$path = trim(parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH) ?? '', '/');
 
-if (preg_match('/\/?user\/([^\/]+)/', $requestUri, $matches)) {
-    $username = htmlspecialchars($matches[1]);
-    if ($username) {
-        $user = grabUserInfo(null, $username);
-    }
+if (preg_match('~^user/([^/]+)$~', $path, $matches)) {
+    $user = grabUserInfo(null, rawurldecode($matches[1]));
 }
 
-$currentUser = null;
-$isSelf = false;
-$isFollower = false;
 $loggedIn = isset($_SESSION['user_id']);
+$isSelf = $user && $loggedIn && (string)$user['id'] === (string)$_SESSION['user_id'];
+$isFollower = $user && $loggedIn && !$isSelf && checkIfFollowing($_SESSION['user_id'], $user['id']);
 
-if ($loggedIn) {
-    $currentUser = grabUserInfo($_SESSION['user_id']); 
-    $isSelf = $user['id'] === $_SESSION['user_id'];
-    $isFollower = checkIfFollowing($_SESSION['user_id'], $user['id']);
+if (!$user) {
+    http_response_code(404);
 }
 
 ?>
@@ -35,7 +28,7 @@ if ($loggedIn) {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <?php getHeadAssets(); ?>
 
-    <!-- Migth implement crawler friendly properties -->
+    <title><?= $user ? htmlspecialchars($user['username']) . ' on FoodDecider' : 'Profile not found - FoodDecider' ?></title>
 
 </head>
 <body>
@@ -45,44 +38,56 @@ if ($loggedIn) {
     <?php echo getExpandedModal(); ?>
     <?php echo getFilterMenu(); ?>
 
-    <div class="modal hidden" id="follower-modal">
-        <div class="modal-content">
-            <span class="close-button">&times;</span>
+    <div class="modal hidden" id="follower-modal" role="dialog" aria-modal="true" aria-labelledby="follower-modal-title">
+        <button type="button" class="close-button" aria-label="Close">&times;</button>
+        <div class="dlg">
             <h2 id="follower-modal-title"></h2>
-            <div id="follower-list"></div>
-         </div>
+            <div id="follower-list" class="follower-list"></div>
+        </div>
     </div>
 
+    <?php if (!$user): ?>
+    <main class="user-page">
+        <div class="empty">
+            <h3>No one by that name</h3>
+            <p>The profile may have been renamed or removed.</p>
+            <a class="btn" href="/">Back to recipes</a>
+        </div>
+    </main>
+    <?php else: ?>
+    <main class="user-page">
     <div class="user-profile">
-        <?php if ($user['image_base']): ?>
-                <img class="user-profile-img" src="/uploads/profile_pictures/<?php echo htmlspecialchars($user['image_base']); ?>.webp" alt="profile picture"></img>
-            <?php else: ?>
-                <img class="user-profile-img" src="/uploads/profile_pictures/<?php echo htmlspecialchars($user['username']); ?>_avatar.svg" alt="profile picture"></img>
+        <img class="user-profile-img"
+             src="<?= $user['image_base']
+                ? '/uploads/profile_pictures/' . htmlspecialchars($user['image_base']) . '.webp'
+                : '/uploads/profile_pictures/' . htmlspecialchars($user['username']) . '_avatar.svg' ?>"
+             alt="">
+        <div class="user-profile-text">
+            <h1 class="user-profile-name"><?= htmlspecialchars($user['username']) ?></h1>
+            <?php if (!empty($user['bio'])): ?>
+                <p class="user-profile-bio"><?= htmlspecialchars($user['bio']) ?></p>
             <?php endif; ?>
-        <h2 class="user-profile-name"> <?php echo htmlspecialchars($user['username']) ?> </h2>
-        <div class="follower-count-container flex">
-            <p id="follower-count" data-id="<?php echo $user['id']?>"> followers:  <?php echo htmlspecialchars($user['followers_count']); ?></p>
-            <p id="following-count" data-id="<?php echo $user['id']?>"> follows: <?php echo htmlspecialchars($user['following_count']); ?></p>
-        </div>
-        <?php echo isset($user['bio']) ? '<p class="user-profile-bio">' . htmlspecialchars($user['bio']) . '</p>' : ''; ?>
-        <?php if (!$isSelf && $loggedIn): ?>
-            <button class="follow-button" id="follow-button" data-id="<?php echo $user['id']?>"> <?php echo $isFollower ? 'Unfollow' : 'Follow'; ?></button>
-        <?php endif; ?>
-        <h3>User's recipes</h3>
-        <div class="recipe-card-container" id="recipe-list"></div>
-        
-        <div class="modal hidden" id="expanded-modal">
-            <span class="close-button">&times;</span>
-            <div class="modal-content" id="expanded-content">
+            <div class="follower-count-container">
+                <button type="button" class="stat" id="follower-count" data-id="<?= htmlspecialchars($user['id']) ?>">
+                    <strong data-count="<?= (int)$user['followers_count'] ?>"><?= (int)$user['followers_count'] ?></strong>
+                    <?= (int)$user['followers_count'] === 1 ? 'follower' : 'followers' ?>
+                </button>
+                <button type="button" class="stat" id="following-count" data-id="<?= htmlspecialchars($user['id']) ?>">
+                    <strong><?= (int)$user['following_count'] ?></strong> following
+                </button>
             </div>
+            <?php if (!$isSelf): ?>
+                <button class="btn <?= $isFollower ? '' : 'p' ?> follow-button" id="follow-button"
+                        data-id="<?= htmlspecialchars($user['id']) ?>" aria-pressed="<?= $isFollower ? 'true' : 'false' ?>">
+                    <?= $isFollower ? 'Following' : 'Follow' ?>
+                </button>
+            <?php endif; ?>
         </div>
-
-        <?php 
-        echo getFilterMenu(); 
-        echo getExpandedModal();    
-        ?>
-
     </div>
+        <h2 class="user-recipes-title"><?= $isSelf ? 'Your recipes' : htmlspecialchars($user['username']) . '’s recipes' ?></h2>
+        <div class="recipe-card-container" id="recipe-list"></div>
+    </main>
+    <?php endif; ?>
     <?php if(!$loggedIn) {
         echo getLoginModal();
     }; ?>

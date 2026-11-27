@@ -1,4 +1,5 @@
 import { toast } from './toast.js';
+import { requireLogin } from './ui.js';
 import { pickItemsDialog } from './dialog.js';
 import { fetchLists, pickList, listLabel, addItems, setLastListId } from './shopping-api.js';
 
@@ -12,6 +13,7 @@ const textOf = row => row.querySelector(':scope > p')?.textContent.replace(/\s+/
 async function addOne(button) {
     const text = textOf(button.closest(INGREDIENT));
     if (!text) return;
+    if (!await requireLogin('keep a shopping list')) return;
 
     button.disabled = true;
     try {
@@ -34,8 +36,12 @@ async function addOne(button) {
 // ---- add all: choose ingredients and list ------------------------------------
 
 async function addAll() {
-    const texts = [...document.querySelectorAll(INGREDIENT)].map(textOf).filter(Boolean);
-    if (!texts.length) return;
+    const texts = [...document.querySelectorAll(`#expanded-modal ${INGREDIENT}`)].map(textOf).filter(Boolean);
+    if (!texts.length) {
+        toast.info('This recipe has no ingredients to add');
+        return;
+    }
+    if (!await requireLogin('keep a shopping list')) return;
 
     let lists;
     try {
@@ -67,11 +73,13 @@ async function addAll() {
 // ---- wiring --------------------------------------------------------------------
 
 export function init() {
-    console.log('initAddToList');
     // Delegated, so it also works for ingredients your JS renders later
     document.addEventListener('click', event => {
         const addButton = event.target.closest('.ingredient-add-button');
-        if (addButton) return addOne(addButton);
+        if (addButton) {
+            event.stopPropagation();   // don't also tick the ingredient off
+            return addOne(addButton);
+        }
 
         if (event.target.closest('.add-all-button')) addAll();
     });

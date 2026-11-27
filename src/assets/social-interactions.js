@@ -1,5 +1,7 @@
 import { toast } from './toast.js';
 import { escapeHtml } from './recipe-cards.js';
+import { confirmDialog } from './dialog.js';
+import { api, plural } from './ui.js';
 
 let inviteModal = null;
 let badgeCount;
@@ -28,10 +30,8 @@ export function init(modal) {
         let createGroupForm = document.querySelector('#create-group-form');
         if (createGroupForm) {
             document.querySelector('#add-member-btn')?.addEventListener('click', () => addMemberRow());
-            createGroupForm.addEventListener('submit', (e) => {
-                submitGroupForm(e);
-                resetMemberForm();
-            });
+            // The form is only cleared after the group was created, so a failure keeps what was typed
+            createGroupForm.addEventListener('submit', submitGroupForm);
         }
     }
     updateBadgeCount();
@@ -130,34 +130,28 @@ function createGroup() {
     if (!modal.classList.contains('hidden')) loadSuggestions();
 }
 
-function submitGroupForm(e) {
-    console.log('Submitting group form...');
+async function submitGroupForm(e) {
     e.preventDefault();
     const form = e.target;
-    const formData = new FormData(form);
+    const button = form.querySelector('button[type="submit"]');
+    if (button.disabled) return;
+    button.disabled = true;
 
-    fetch('/api/groups/groups.php', {
-        method: 'POST',
-        body: formData
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (data.success) {
-            toast.success('Group created successfully!');
-            if (data.skipped?.length > 0) {
-                toast.info(`Could not invite: ${data.skipped.join(', ')}`);
-            }
-            document.querySelector('#create-group-modal').classList.add('hidden');
-            form.reset();
-            resetMemberForm();
-            loadGroups();
-        } else {
-            toast.error('Error creating group: ' + data.message);
+    try {
+        const data = await api('/api/groups/groups.php', { method: 'POST', form: new FormData(form) });
+        toast.success(`Created ${form.querySelector('#group_name')?.value.trim() || 'the group'}`);
+        if (data.skipped?.length > 0) {
+            toast.info(`Couldn’t invite: ${data.skipped.join(', ')}. Check the usernames.`, { duration: 8000 });
         }
-    })
-    .catch(e => {
-        toast.error('An unexpected error occurred');
-    });
+        document.querySelector('#create-group-modal').classList.add('hidden');
+        form.reset();
+        resetMemberForm();
+        loadGroups();
+    } catch (error) {
+        toast.error(error.message || 'Could not create the group');
+    } finally {
+        button.disabled = false;
+    }
 }
 
 async function updateBadgeCount() {
@@ -177,23 +171,27 @@ async function updateBadgeCount() {
 }
 
 async function loadInvitations() {
+    const section = document.getElementById('invitations-section');
     inviteModal.classList.remove('hidden');
-    inviteModal.innerHTML = '<p>Loading invitations...</p>';
+    inviteModal.innerHTML = '<p class="rv-muted">Loading invitations…</p>';
 
     try {
         const res = await fetch('/api/groups/invitations.php');
         const invitations = await res.json();
 
         if (!invitations.success || invitations.count === 0) {
-            inviteModal.innerHTML = '<p>No invitations at this time.</p>';
+            inviteModal.innerHTML = '';
+            if (section) section.hidden = true;   // nothing to show: no empty "Invitations" heading
             updateBadgeUI(0);
             return;
         }
 
+        if (section) section.hidden = false;
         updateBadgeUI(invitations.count);
         renderInvitations(invitations.invitations);
     } catch (error) {
-        inviteModal.innerHTML = '<p>Could not load invitations. Please try again later.</p>';
+        if (section) section.hidden = false;
+        inviteModal.innerHTML = '<p class="rv-muted">Could not load invitations. Try again later.</p>';
         console.error(error);
     }
 }
@@ -204,13 +202,13 @@ async function loadGroups() {
         const groups = await res.json();
 
         if (!groups.success || groups.count === 0) {
-            document.querySelector('#group-list').innerHTML = '<p>No groups found.</p>';
+            document.querySelector('#group-list').innerHTML = '<p class="rv-muted">You’re not in any groups yet.</p>';
             return;
         }
 
         renderGroups(groups.groups);
     } catch (error) {
-        document.querySelector('#group-list').innerHTML = '<p>Could not load groups. Please try again later.</p>';
+        document.querySelector('#group-list').innerHTML = '<p class="rv-muted">Could not load groups. Try again later.</p>';
         console.error(error);
     }
 }
@@ -222,36 +220,39 @@ function renderGroups(groups) {
         const groupElement = document.createElement('div');
         groupElement.classList.add('group');
         groupElement.innerHTML = `
-            <p>${escapeHtml(group.group_name)}</p>
-            <button class="leave-group" data-id="${escapeHtml(group.id)}">Leave</button>
+            <div class="group-text">
+                <p class="group-name">${escapeHtml(group.group_name)}</p>
+                ${group.member_count != null ? `<small>${plural(Number(group.member_count), 'member')}</small>` : ''}
+            </div>
+            <button type="button" class="btn leave-group" data-id="${escapeHtml(group.id)}" data-name="${escapeHtml(group.group_name)}">Leave</button>
         `;
         groupList.appendChild(groupElement);
     });
 
     groupList.querySelectorAll('.leave-group').forEach(button => {
-        button.addEventListener('click', () => handleLeaveGroup(button.dataset.id));
+        button.addEventListener('click', () => handleLeaveGroup(button.dataset.id, button));
     });
 }
 
-async function handleLeaveGroup(groupId) {
-    try {
-        const res = await fetch('/api/groups/groups.php', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/x-www-form-urlencoded'
-            },
-            body: new URLSearchParams({ action: 'leave', group_id: groupId })
-        });
-        const data = await res.json();
+async function handleLeaveGroup(groupId, button) {
+    const name = button?.dataset.name || 'this group';
+    if (!await confirmDialog({ title: 'Leave group', message: `Leave ${name}? Lists shared with it will no longer show up for you.`, confirmText: 'Leave', danger: true })) return;
 
-        if (data.success) {
-            toast.success('Left group successfully!');
-            loadGroups(); // Refresh the groups list
-        } else {
-            toast.error(`Error: ${data.message}`);
-        }
+    const row = button?.closest('.group');
+    const list = row?.parentElement;
+    const next = row?.nextSibling;
+    row?.remove();                                   // gone right away…
+    if (list && !list.querySelector('.group')) list.innerHTML = '<p class="rv-muted">You’re not in any groups yet.</p>';
+
+    try {
+        await api('/api/groups/groups.php', { method: 'POST', form: new URLSearchParams({ action: 'leave', group_id: groupId }) });
+        toast.success(`You left ${name}`);
     } catch (error) {
-        console.error('Error leaving group:', error);
+        if (list && row) {                           // …and back if it didn't work
+            list.querySelector('.rv-muted')?.remove();
+            list.insertBefore(row, next?.isConnected ? next : null);
+        }
+        toast.error(error.message || 'Could not leave the group');
     }
 }
 
@@ -261,9 +262,12 @@ function renderInvitations(invitations) {
         const invitationElement = document.createElement('div');
         invitationElement.classList.add('invitation');
         invitationElement.innerHTML = `
-            <p>${escapeHtml(invitation.group_name)} - Invited by ${escapeHtml(invitation.inviter_name)}</p>
-            <button class="accept-invite" data-id="${escapeHtml(invitation.invitation_id)}">Accept</button>
-            <button class="decline-invite" data-id="${escapeHtml(invitation.invitation_id)}">Decline</button>
+            <div class="group-text">
+                <p class="group-name">${escapeHtml(invitation.group_name)}</p>
+                <small>Invited by ${escapeHtml(invitation.inviter_name)}</small>
+            </div>
+            <button type="button" class="btn p accept-invite" data-id="${escapeHtml(invitation.invitation_id)}">Join</button>
+            <button type="button" class="btn decline-invite" data-id="${escapeHtml(invitation.invitation_id)}">Decline</button>
         `;
         inviteModal.appendChild(invitationElement);
     });
@@ -278,30 +282,30 @@ function renderInvitations(invitations) {
 }
 
 async function handleInviteAction(invitationId, action) {
-    try {
-        const res = await fetch('/api/groups/invitations.php', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ invitation_id: invitationId, action: action })
-        });
-        const data = await res.json();
+    // The invitation disappears and the badge counts down at once; it comes back if the server says no
+    const row = inviteModal.querySelector(`[data-id="${CSS.escape(String(invitationId))}"]`)?.closest('.invitation');
+    const name = row?.querySelector('.group-name')?.textContent ?? 'the group';
+    const before = Number(badgeCount?.textContent) || inviteModal.querySelectorAll('.invitation').length;
+    row?.classList.add('is-leaving');
+    row?.querySelectorAll('button').forEach(b => { b.disabled = true; });
+    updateBadgeUI(Math.max(0, before - 1));
 
-        if (data.status === 'success') {
-            toast.success(`Invitation ${action}ed successfully!`);
-            updateBadgeUI(data.remaining_count);
-            loadInvitations();
-            loadGroups();
-        } else {
-            toast.error(`Error: ${data.message}`);
-        }
+    try {
+        const data = await api('/api/groups/invitations.php', { method: 'POST', json: { invitation_id: invitationId, action } });
+        toast.success(action === 'accept' ? `You joined ${name}` : `Declined the invitation to ${name}`);
+        updateBadgeUI(data.remaining_count ?? Math.max(0, before - 1));
+        loadInvitations();
+        if (action === 'accept') loadGroups();
     } catch (error) {
-        console.error('Error handling invitation:', error);
+        row?.classList.remove('is-leaving');
+        row?.querySelectorAll('button').forEach(b => { b.disabled = false; });
+        updateBadgeUI(before);
+        toast.error(error.message || 'Could not answer the invitation');
     }
 }
 
 function updateBadgeUI(count) {
+    if (!badgeCount) return;
     if (count > 0) {
         badgeCount.textContent = count > 99 ? '99+' : count;
         badgeCount.classList.remove('hidden');

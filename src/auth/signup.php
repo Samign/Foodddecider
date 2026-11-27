@@ -22,7 +22,7 @@ $password = trim($_POST['password'] ?? '');
 
 if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
     http_response_code(400);
-    exit;
+    exit('Enter a valid email address');
 }
 
 // The username ends up in file names, URLs (/user/name) and pages: letters, digits, _ . - only.
@@ -78,6 +78,7 @@ try {
     
     $db->commit();
     
+    session_regenerate_id(true);
     $_SESSION['user_id'] = $userId;
     header('Location: /index.php');
     exit;
@@ -87,7 +88,7 @@ try {
 
     if ($e->getCode() === '23505') {
         http_response_code(409);
-        exit('Email or username already exists');
+        exit('That email or username is already taken');
     }
 
     throw $e;

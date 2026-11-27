@@ -7,10 +7,15 @@ let lastSelectedIngredientSection = null;
 let lastSelectedIngredientItem = null;
 let lastSelectedInstructionSection = null;
 let lastSelectedInstructionBox = null;
+let setTagsImpl = null;   // set in init(): replaces the form's tags (used when editing a recipe)
+
+/** Put these tag names in the form (editing / forking). Before this, editing a recipe dropped all its tags. */
+export function setFormTags(names = []) {
+    setTagsImpl?.(names);
+}
 
 
 export async function init(targetElement) {
-    console.log("init called for add-recipe.js" + (targetElement ? ` on ${targetElement.id}` : ''));
 
     const ingredientSuggestions = targetElement.querySelector('.autocomplete-list');
 
@@ -123,6 +128,14 @@ export async function init(targetElement) {
         if (addTagButton) {
             addTagButton.addEventListener('click', addFromInput);
         }
+
+        setTagsImpl = (names) => {
+            tagsContainer.querySelectorAll('.tag-item').forEach(el => el.remove());
+            names.forEach(name => addTag(name));
+            syncSuggestions();
+        };
+        // A reset form (after saving, or a fresh "Add recipe") starts without tags
+        targetElement.addEventListener('reset', () => setTagsImpl([]));
     
         // Optional: Enter adds the tag instead of submitting the form
         tagSearchInput.addEventListener('keydown', (e) => {
@@ -358,7 +371,7 @@ export async function readSaveResponse(response, failText) {
         return false;
     }
     if (result.warning) toast.info(result.warning, { duration: 8000 });
-    return true;
+    return result;   // truthy: saved (has recipe_id for new recipes)
 }
 
 export async function handleAddRecipe(e) {
@@ -370,9 +383,13 @@ export async function handleAddRecipe(e) {
             method: 'POST',
             body: new FormData(form)
         });
-        if (await readSaveResponse(response, 'Failed to add recipe')) {
-            toast.success('Recipe added successfully');
+        const result = await readSaveResponse(response, 'Failed to add recipe');
+        if (result) {
+            toast.success('Recipe added to your kitchen');
             form.reset();
+            document.getElementById('add-menu')?.classList.add('hidden');
+            // recipes.js reloads the list, recipe-modal.js opens the new recipe
+            document.dispatchEvent(new CustomEvent('recipe:saved', { detail: { id: Number(result.recipe_id), open: true } }));
         }
     } catch {
         toast.error('Could not reach the server. Your recipe is still in the form, try again.');
